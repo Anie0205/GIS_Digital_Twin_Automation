@@ -1,119 +1,166 @@
+import ee
+import geemap
 import os
 import json
 import math
 import requests
+import numpy as np
+import warnings
+from PIL import Image
 import rasterio
 from rasterio.transform import from_bounds
-from rasterio.warp import calculate_default_transform, reproject, Resampling
-from PIL import Image
-from io import BytesIO
-import numpy as np
-import time
 
-def load_metadata():
-    print("\n" + "="*40)
-    print(" GeoAI Phase 2: Orthomosaic Generator")
-    print("="*40)
-    project_dir = input("\nEnter the project folder name: ").strip().replace('"', '').replace("'", "")
+warnings.filterwarnings("ignore")
+Image.MAX_IMAGE_PIXELS = None
 
-    if not os.path.isdir(project_dir):
-        print(f"[X] Error: Directory '{project_dir}' not found.")
-        return None, None
+# --- CONFIGURATION ---
+GEE_PROJECT_ID = 'my-digital-twin-city'
+# Get your free key (NO CREDIT CARD) at maptiler.com/cloud
+MAPTILER_API_KEY = "L0KBvV2Dy1sqKmCIesfg" 
 
-    metadata_path = os.path.join(project_dir, "metadata.json")
-    with open(metadata_path, "r") as f:
-        metadata = json.load(f)
-        return metadata, project_dir
-
-def deg2tile(lat, lon, zoom):
-    lat_rad = math.radians(lat)
+# --- SLIPPY MAP TILE MATH ---
+def deg2num(lat_deg, lon_deg, zoom):
+    lat_rad = math.radians(lat_deg)
     n = 2.0 ** zoom
-    xtile = int((lon + 180.0) / 360.0 * n)
-    ytile = int((1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
-    return xtile, ytile
+    xtile = int((lon_deg + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return (xtile, ytile)
 
-def tile2deg(xtile, ytile, zoom):
+def num2deg(xtile, ytile, zoom):
     n = 2.0 ** zoom
     lon_deg = xtile / n * 360.0 - 180.0
     lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
     lat_deg = math.degrees(lat_rad)
-    return lat_deg, lon_deg
+    return (lat_deg, lon_deg)
 
-def create_ortho():
-    metadata, folder = load_metadata()
-    if not metadata: return
+# --- ENGINE 1: AUTHORIZED HIGH-RES MAPTILER API ---
+def download_maptiler_satellite(bbox, zoom, output_path, api_key):
+    north, south, east, west = bbox[0], bbox[1], bbox[2], bbox[3]
+    
+    x_min, y_max = deg2num(south, west, zoom)
+    x_max, y_min = deg2num(north, east, zoom)
+    
+    print(f"\n[?] Fetching high-res tiles via MapTiler API at Zoom {zoom}...")
+    
+    tile_size = 512 
+    canvas_width = (x_max - x_min + 1) * tile_size
+    canvas_height = (y_max - y_min + 1) * tile_size
+    stitched_image = Image.new('RGB', (canvas_width, canvas_height))
 
-    bbox = metadata['bbox'] # [north, south, east, west]
+    for x in range(x_min, x_max + 1):
+        for y in range(y_min, y_max + 1):
+            url = f"https://api.maptiler.com/tiles/satellite-v2/{zoom}/{x}/{y}.jpg?key={api_key}"
+            
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                from io import BytesIO
+                img = Image.open(BytesIO(response.content))
+                if img.size[0] != tile_size:
+                    img = img.resize((tile_size, tile_size))
+                
+                paste_x = (x - x_min) * tile_size
+                paste_y = (y - y_min) * tile_size
+                stitched_image.paste(img, (paste_x, paste_y))
+            else:
+                raise Exception(f"API rejected tile {x},{y}. Status: {response.status_code}")
+
+    top_lat, left_lon = num2deg(x_min, y_min, zoom)
+    bottom_lat, right_lon = num2deg(x_max + 1, y_max + 1, zoom)
+    transform = from_bounds(left_lon, bottom_lat, right_lon, top_lat, canvas_width, canvas_height)
+    
+    img_array = np.array(stitched_image)
+    
+    print(f"[?] Saving georeferenced GeoTIFF to {output_path}...")
+    with rasterio.open(
+        output_path, 'w', driver='GTiff', height=canvas_height, width=canvas_width,
+        count=3, dtype=img_array.dtype, crs='EPSG:4326', transform=transform
+    ) as dst:
+        dst.write(img_array[:, :, 0], 1) 
+        dst.write(img_array[:, :, 1], 2) 
+        dst.write(img_array[:, :, 2], 3) 
+
+# --- ENGINE 2: PURE SENTINEL-2 BACKUP (GEE native) ---
+def sentinel_backup(roi, final_path, crs):
+    print("\n[🌍] Generating Sentinel-2 Baseline (10m, unlimited)...")
+    s2_collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+        .filterBounds(roi)
+        .filterDate('2025-01-01', '2026-12-31') 
+        .median())
+    
+    rgb = s2_collection.visualize(bands=['B4', 'B3', 'B2'], min=0, max=3000)
+    
+    geemap.ee_export_image(
+        rgb, filename=final_path, scale=10,
+        region=roi, crs=crs, file_per_band=False
+    )
+    print(f"[✓] Sentinel-2 backup ready!")
+
+# --- MAIN ORCHESTRATOR ---
+def generate_ortho():
+    print("\n==================================================")
+    print(" GeoAI Phase 2: Interactive Ortho Engine")
+    print("==================================================")
+    
+    project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
+    abs_path = os.path.abspath(project_dir)
+    final_path = os.path.join(abs_path, "ortho_final.tif")
+    
+    with open(os.path.join(abs_path, "metadata.json"), "r") as f:
+        metadata = json.load(f)
+    
+    bbox = metadata['bbox']  
+    region = [bbox[3], bbox[1], bbox[2], bbox[0]]  
     target_crs = metadata['epsg']
-    zoom = 18 
 
-    # 1. Calculate and Download Tiles
-    x_start, y_start = deg2tile(bbox[0], bbox[3], zoom)
-    x_end, y_end = deg2tile(bbox[1], bbox[2], zoom)
-    
-    num_x, num_y = x_end - x_start + 1, y_end - y_start + 1
-    width, height = num_x * 256, num_y * 256
-    
-    print(f"\n[?] Stitching {num_x * num_y} tiles for {metadata['location']}...")
-    stitched = Image.new('RGB', (width, height))
+    if os.path.exists(final_path):
+        print(f"\n[✓] PRIORITY 0: {final_path} already exists.")
+        overwrite = input("Do you want to overwrite it? (y/n) [n]: ").strip().lower()
+        if overwrite != 'y':
+            return
 
-    success_count = 0
-    for x in range(x_start, x_end + 1):
-        for y in range(y_start, y_end + 1):
-            url = f"https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={zoom}"
+    # --- THE INTERACTIVE MENU ---
+    print("\nSelect Image Engine:")
+    print("  1) MapTiler (High-Res 0.6m, requires API key)")
+    print("  2) Sentinel-2 (Standard 10m, GEE native)")
+    print("  3) Auto (Try MapTiler, auto-fallback to Sentinel-2)")
+    
+    choice = input("\nEnter choice (1/2/3) [3]: ").strip()
+    if choice not in ['1', '2', '3']:
+        choice = '3' # Defaults to Auto if you just press Enter
+
+    # --- MAPTILER EXECUTION ---
+    if choice in ['1', '3']:
+        try:
+            if MAPTILER_API_KEY == "YOUR_MAPTILER_KEY":
+                raise Exception("MapTiler API key not configured in the script.")
+                
+            download_maptiler_satellite(bbox, zoom=18, output_path=final_path, api_key=MAPTILER_API_KEY)
+            print(f"\n[✓] SUCCESS: Authorized High-Res Ortho saved!")
+            return 
+            
+        except Exception as e:
+            print(f"\n[X] MapTiler Failed: {e}")
+            if choice == '1':
+                print("[!] Exiting. Run again and select Sentinel-2 or Auto to use the fallback.")
+                return
+            else:
+                print("[?] Triggering Sentinel-2 fail-safe...")
+
+    # --- SENTINEL EXECUTION ---
+    if choice in ['2', '3']:
+        try:
             try:
-                r = requests.get(url, timeout=15)
-                if r.status_code == 200:
-                    img = Image.open(BytesIO(r.content)).convert('RGB')
-                    stitched.paste(img, ((x - x_start) * 256, (y - y_start) * 256))
-                    success_count += 1
-            except Exception as e:
-                print(f"    [!] Tile {x},{y} failed: {e}")
+                ee.Initialize(project=GEE_PROJECT_ID)
+            except:
+                ee.Authenticate()
+                ee.Initialize(project=GEE_PROJECT_ID)
 
-    # DEBUG CHECK: Ensure we actually have an image
-    if success_count == 0:
-        print("[X] Error: No tiles were downloaded. Check your internet connection.")
-        return
-
-    # 2. Save Temporary GeoTIFF
-    temp_path = os.path.join(folder, "temp_wgs84.tif")
-    # Ensure array is uint8 (standard for images)
-    img_array = np.array(stitched).transpose(2, 0, 1).astype('uint8')
-    
-    lat_n, lon_w = tile2deg(x_start, y_start, zoom)
-    lat_s, lon_e = tile2deg(x_end + 1, y_end + 1, zoom)
-    transform = from_bounds(lon_w, lat_s, lon_e, lat_n, width, height)
-
-    print(f"[?] Saving temporary file...")
-    with rasterio.open(temp_path, 'w', driver='GTiff', height=height, width=width,
-                       count=3, dtype='uint8', crs='EPSG:4326', transform=transform) as dst:
-        dst.write(img_array)
-
-    # 3. Force Close and Re-Open for Reprojection
-    time.sleep(1) # Small pause to ensure file system has flushed the write
-    
-    final_path = os.path.join(folder, "ortho_metric.tif")
-    print(f"[?] Reprojecting to {target_crs}...")
-
-    try:
-        with rasterio.open(temp_path) as src:
-            transform, width, height = calculate_default_transform(src.crs, target_crs, src.width, src.height, *src.bounds)
-            kwargs = src.meta.copy()
-            kwargs.update({'crs': target_crs, 'transform': transform, 'width': width, 'height': height})
-
-            with rasterio.open(final_path, 'w', **kwargs) as dst:
-                for i in range(1, src.count + 1):
-                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i),
-                              src_transform=src.transform, src_crs=src.crs,
-                              dst_transform=transform, dst_crs=target_crs, resampling=Resampling.nearest)
-        
-        # Cleanup
-        if os.path.exists(temp_path): os.remove(temp_path)
-        print(f"\n[✓] Success! Orthomosaic saved: {final_path}")
-
-    except Exception as e:
-        print(f"\n[X] Reprojection Error: {e}")
-        print("    Ensure your project folder contains 'metadata.json' with the correct EPSG code.")
+            roi = ee.Geometry.BBox(*region)
+            sentinel_backup(roi, final_path, target_crs)
+            
+        except Exception as e:
+            print(f"\n[X] CRITICAL FAILURE: GEE Sentinel-2 failed.")
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
-    create_ortho()
+    generate_ortho()

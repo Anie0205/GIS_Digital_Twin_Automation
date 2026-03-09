@@ -39,7 +39,8 @@ def get_bbox_from_map():
     root.geometry("800x600")
     root.title("GeoAI - Click and Drag to Select Area")
 
-    label = tk.Label(root, text="Left-Click and DRAG to draw your extraction area", font=("Helvetica", 12, "bold"))
+    # UPDATED: Changed instructions to specify Right-Click
+    label = tk.Label(root, text="Right-Click and DRAG to draw your extraction area", font=("Helvetica", 12, "bold"))
     label.pack(pady=10)
 
     map_widget = tkintermapview.TkinterMapView(root, width=800, height=500, corner_radius=0)
@@ -71,9 +72,11 @@ def get_bbox_from_map():
         state["final_bbox"] = (n, s, e, w)
         label.config(text="Area Locked! Close window to start extraction.", fg="green")
 
-    map_widget.canvas.bind("<Button-1>", on_button_press)
-    map_widget.canvas.bind("<B1-Motion>", on_mouse_drag)
-    map_widget.canvas.bind("<ButtonRelease-1>", on_button_release)
+    # UPDATED: Changed Button-1 (Left Click) to Button-3 (Right Click)
+    map_widget.canvas.bind("<Button-3>", on_button_press)
+    map_widget.canvas.bind("<B3-Motion>", on_mouse_drag)
+    map_widget.canvas.bind("<ButtonRelease-3>", on_button_release)
+    
     root.mainloop()
 
     if state["final_bbox"]:
