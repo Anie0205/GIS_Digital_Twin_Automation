@@ -45,8 +45,15 @@ def download_aws_skadi_tile(lat, lon, target_folder):
         print(f"  [!] Connection Error: {e}")
         return None
 
-def main():
-    metadata, folder = load_project()
+def main(folder=None):
+    if folder:
+        # If folder is provided, load metadata directly
+        with open(os.path.join(folder, "metadata.json"), "r") as f:
+            metadata = json.load(f)
+    else:
+        # Fallback to manual input if run as a standalone script
+        metadata, folder = load_project()
+    
     if not metadata: return
 
     # 1. Automated Enterprise Download

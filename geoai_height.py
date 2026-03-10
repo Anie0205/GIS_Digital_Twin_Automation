@@ -14,8 +14,11 @@ def get_elevation_at_point(raster, x, y):
     except:
         return 0
 
-def extrude_with_ai_terrain():
-    project_dir = input("\nEnter project folder: ").strip()
+def extrude_with_ai_terrain(project_dir=None):
+    # If no folder is passed (running standalone), ask the user
+    if project_dir is None:
+        project_dir = input("\nEnter project folder: ").strip()
+
     abs_path = os.path.abspath(project_dir)
     
     # Load Metadata for UTM code
