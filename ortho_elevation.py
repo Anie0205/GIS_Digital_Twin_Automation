@@ -9,14 +9,19 @@ import warnings
 from PIL import Image
 import rasterio
 from rasterio.transform import from_bounds
+from dotenv import load_dotenv  # <--- NEW IMPORT
 
 warnings.filterwarnings("ignore")
 Image.MAX_IMAGE_PIXELS = None
 
+# Load the environment variables from the .env file
+load_dotenv()  # <--- NEW COMMAND
+
 # --- CONFIGURATION ---
 GEE_PROJECT_ID = 'my-digital-twin-city'
-# Get your free key (NO CREDIT CARD) at maptiler.com/cloud
-MAPTILER_API_KEY = "L0KBvV2Dy1sqKmCIesfg" 
+
+# Now this will automatically pull from your .env file!
+MAPTILER_API_KEY = os.environ.get("MAPTILER_API_KEY")
 
 # --- SLIPPY MAP TILE MATH ---
 def deg2num(lat_deg, lon_deg, zoom):
@@ -35,6 +40,10 @@ def num2deg(xtile, ytile, zoom):
 
 # --- ENGINE 1: AUTHORIZED HIGH-RES MAPTILER API ---
 def download_maptiler_satellite(bbox, zoom, output_path, api_key):
+    # Added explicit check to immediately fail and trigger orchestrator fallback if key is missing
+    if not api_key:
+        raise ValueError("MAPTILER_API_KEY environment variable is not set.")
+        
     north, south, east, west = bbox[0], bbox[1], bbox[2], bbox[3]
     
     x_min, y_max = deg2num(south, west, zoom)
@@ -81,7 +90,7 @@ def download_maptiler_satellite(bbox, zoom, output_path, api_key):
 
 # --- ENGINE 2: PURE SENTINEL-2 BACKUP (GEE native) ---
 def sentinel_backup(roi, final_path, crs):
-    print("\n[🌍] Generating Sentinel-2 Baseline (10m, unlimited)...")
+    print("\n[?] Generating Sentinel-2 Baseline (10m, unlimited)...")
     s2_collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
         .filterBounds(roi)
         .filterDate('2025-01-01', '2026-12-31') 
@@ -113,7 +122,7 @@ def generate_ortho():
     target_crs = metadata['epsg']
 
     if os.path.exists(final_path):
-        print(f"\n[✓] PRIORITY 0: {final_path} already exists.")
+        print(f"\n[!] PRIORITY 0: {final_path} already exists.")
         overwrite = input("Do you want to overwrite it? (y/n) [n]: ").strip().lower()
         if overwrite != 'y':
             return
@@ -131,8 +140,8 @@ def generate_ortho():
     # --- MAPTILER EXECUTION ---
     if choice in ['1', '3']:
         try:
-            if MAPTILER_API_KEY == "YOUR_MAPTILER_KEY":
-                raise Exception("MapTiler API key not configured in the script.")
+            if not MAPTILER_API_KEY:
+                raise Exception("MAPTILER_API_KEY environment variable not configured.")
                 
             download_maptiler_satellite(bbox, zoom=18, output_path=final_path, api_key=MAPTILER_API_KEY)
             print(f"\n[✓] SUCCESS: Authorized High-Res Ortho saved!")
