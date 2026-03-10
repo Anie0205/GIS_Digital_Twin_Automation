@@ -16,7 +16,7 @@ Image.MAX_IMAGE_PIXELS = None
 # --- CONFIGURATION ---
 GEE_PROJECT_ID = 'my-digital-twin-city'
 # Get your free key (NO CREDIT CARD) at maptiler.com/cloud
-MAPTILER_API_KEY = "your-key" 
+MAPTILER_API_KEY = "L0KBvV2Dy1sqKmCIesfg" 
 
 # --- SLIPPY MAP TILE MATH ---
 def deg2num(lat_deg, lon_deg, zoom):

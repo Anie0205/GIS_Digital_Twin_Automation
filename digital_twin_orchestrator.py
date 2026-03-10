@@ -1,11 +1,14 @@
 import os
 import json
 import math
+import rasterio
+import geopandas as gpd  # Fix for Pylance error
+import pandas as pd
 from pyproj import Transformer
 
 # Import your sub-modules
 from vectors_pipeline import get_bbox_from_map, get_bbox_from_text, fetch_bbox_safe
-from ortho_elevation import download_maptiler_satellite, sentinel_backup, MAPTILER_API_KEY, GEE_PROJECT_ID
+from ortho_elevation import download_maptiler_satellite, MAPTILER_API_KEY
 import terrain_elevation
 from geoai_terrain import generate_geoai_dem 
 from reproject_coord import reproject_raster, reproject_vectors
@@ -22,18 +25,15 @@ def init_metadata(folder, bbox, place_name):
     target_epsg = get_utm_epsg((n + s) / 2, (e + w) / 2)
     transformer = Transformer.from_crs("EPSG:4326", target_epsg, always_xy=True)
     
-    # Get current metric dimensions
     x_min_raw, y_min_raw = transformer.transform(w, s)
     x_max_raw, y_max_raw = transformer.transform(e, n)
     
-    # Calculate the 'Square Side' to satisfy Geovia's 1-meter tolerance
     side = max(x_max_raw - x_min_raw, y_max_raw - y_min_raw)
     cx, cy = (x_min_raw + x_max_raw) / 2, (y_min_raw + y_max_raw) / 2
     
     x_min, x_max = cx - (side / 2), cx + (side / 2)
     y_min, y_max = cy - (side / 2), cy + (side / 2)
 
-    # Convert back to Degrees for the scrapers
     inv_transformer = Transformer.from_crs(target_epsg, "EPSG:4326", always_xy=True)
     w_new, s_new = inv_transformer.transform(x_min, y_min)
     e_new, n_new = inv_transformer.transform(x_max, y_max)
@@ -44,8 +44,7 @@ def init_metadata(folder, bbox, place_name):
         "bbox": [n_new, s_new, e_new, w_new],
         "geovia_coords": {
             "xmin": round(x_min, 3), "xmax": round(x_max, 3),
-            "ymin": round(y_min, 3), "ymax": round(y_max, 3),
-            "side_meters": round(side, 3)
+            "ymin": round(y_min, 3), "ymax": round(y_max, 3)
         }
     }
     os.makedirs(folder, exist_ok=True)
@@ -58,14 +57,32 @@ def main():
     print(" GEOAI DIGITAL TWIN: MASTER ORCHESTRATOR")
     print("==============================================\n")
 
-    # STEP 1: Area Selection
-    mode = input("Select mode: [1] Search Text [2] Map Visual: ")
-    bbox_raw, place_name = get_bbox_from_map() if mode == '2' else get_bbox_from_text(input("Enter location: "))
-    
-    folder = place_name.replace(" ", "_").replace(",", "").split("_")[0] 
-    meta = init_metadata(folder, bbox_raw, place_name)
-    bbox = meta['bbox']
-    target_epsg = meta['epsg']
+    # --- STEP 0: PROJECT STATE MANAGER ---
+    print("Project Configuration:")
+    print("  [1] Start New City Selection")
+    print("  [2] Work on Existing Project Folder")
+    startup_mode = input("Choice (1/2): ").strip()
+
+    if startup_mode == '2':
+        folder = input("Enter existing project folder path: ").strip().replace('"', '')
+        if not os.path.exists(os.path.join(folder, "metadata.json")):
+            print("[X] Error: No metadata.json found in that folder.")
+            return
+        with open(os.path.join(folder, "metadata.json"), "r") as f:
+            meta = json.load(f)
+        bbox = meta['bbox']
+        target_epsg = meta['epsg']
+        print(f"[✓] Resuming project: {folder}")
+    else:
+        # STEP 1: Area Selection
+        mode = input("\nSelect mode: [1] Search Text [2] Map Visual: ")
+        bbox_raw, place_name = get_bbox_from_map() if mode == '2' else get_bbox_from_text(input("Enter location: "))
+        folder = place_name.replace(" ", "_").replace(",", "").split("_")[0] 
+        meta = init_metadata(folder, bbox_raw, place_name)
+        bbox = meta['bbox']
+        target_epsg = meta['epsg']
+
+    # --- REMAINING STEPS WITH EXISTENCE CHECKS ---
 
     # STEP 2: Vector Extraction
     print("\n[STEP 2] Extracting Vectors...")
@@ -79,47 +96,43 @@ def main():
                     data.to_file(os.path.join(folder, f"{tag}.geojson"), driver="GeoJSON")
             except: continue
         else:
-            print(f"  -> {tag}.geojson already exists. Skipping extraction.")
+            print(f"  -> {tag}.geojson already exists. Skipping.")
 
-    # STEP 3: Imagery (API Save Feature)
-    print("\n[STEP 3] Fetching High-Res Imagery...")
+    # STEP 3 & 4: Imagery and Baseline DEM
     ortho_path = os.path.join(folder, "ortho_final.tif")
     if not os.path.exists(ortho_path):
-        try:
-            download_maptiler_satellite(bbox, 18, ortho_path, MAPTILER_API_KEY)
-        except:
-            print("[!] MapTiler failed. Falling back to Sentinel-2...")
-            sentinel_backup(folder, ortho_path) # Assumes your script is refactored
-    else:
-        print(f"  -> {ortho_path} already exists. Skipping API call.")
-
-    # STEP 4: Baseline DEM
-    print("\n[STEP 4] Generating Baseline DEM...")
+        download_maptiler_satellite(bbox, 18, ortho_path, MAPTILER_API_KEY)
+    
     dem_pro_path = os.path.join(folder, "terrain_elevation_pro.tif")
     if not os.path.exists(dem_pro_path):
         terrain_elevation.main(folder=folder)
-    else:
-        print(f"  -> {dem_pro_path} already exists. Skipping generation.")
 
     # STEP 5: GeoAI Fusion
-    print("\n[STEP 5] Running GeoAI Terrain Fusion...")
     final_dem = os.path.join(folder, "terrain_geoai_final.tif")
     if not os.path.exists(final_dem):
         generate_geoai_dem(folder)
-    else:
-        print(f"  -> {final_dem} already exists. Skipping AI processing.")
 
-    # STEP 6: Reprojection & 3D Extrusion
+    # STEP 6: Universal Alignment & Extrusion
     print("\n[STEP 6] Finalizing GDA-Ready Output...")
     reproject_vectors(folder, target_epsg)
-    for r in ["ortho_final.tif", "terrain_geoai_final.tif"]:
-        r_path = os.path.join(folder, r)
-        if os.path.exists(r_path): reproject_raster(r_path, target_epsg)
     
-    extrude_with_ai_terrain(folder)
+    # Universal Height Alignment (Excluding Buildings)
+    abs_path = os.path.abspath(folder)
+    dem_path = os.path.join(abs_path, "terrain_geoai_final_utm.tif")
+    other_vectors = [f for f in os.listdir(abs_path) if f.endswith("_utm.geojson") and "building" not in f.lower()]
 
+    if os.path.exists(dem_path):
+        from geoai_height import get_elevation_at_point # Helper needed here
+        with rasterio.open(dem_path) as dem:
+            for v_file in other_vectors:
+                v_path = os.path.join(abs_path, v_file)
+                gdf = gpd.read_file(v_path)
+                gdf['base_elev'] = gdf.geometry.centroid.apply(lambda p: float(get_elevation_at_point(dem, p.x, p.y)))
+                gdf.to_file(v_path, driver='GeoJSON')
+                print(f"  [✓] Aligned: {v_file}")
+
+    extrude_with_ai_terrain(folder)
     print(f"\n[✓] PIPELINE COMPLETE: ./{folder}/ is ready!")
-    print(f"Copy these to Geovia: X:[{meta['geovia_coords']['xmin']} to {meta['geovia_coords']['xmax']}]")
 
 if __name__ == "__main__":
     main()
