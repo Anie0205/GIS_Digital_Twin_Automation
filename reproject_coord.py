@@ -3,6 +3,7 @@ import json
 import geopandas as gpd
 import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
+from pyproj import Transformer # <-- NEW IMPORT for metric coordinate conversion
 
 def reproject_vectors(folder, target_epsg):
     """Reprojects all GeoJSON files in the folder to the target UTM EPSG."""
@@ -54,22 +55,55 @@ def reproject_raster(input_path, target_epsg):
                 )
     return output_path
 
+def update_metadata_metric_bounds(metadata, meta_path):
+    """Calculates and saves the precise metric UTM bounds into the metadata.json."""
+    target_epsg = metadata['epsg']
+    n, s, e, w = metadata['bbox']
+
+    # Convert WGS84 degrees to target UTM meters
+    transformer_to_utm = Transformer.from_crs("EPSG:4326", target_epsg, always_xy=True)
+    x_min, y_min = transformer_to_utm.transform(w, s)
+    x_max, y_max = transformer_to_utm.transform(e, n)
+
+    # Update JSON with the exact metric limits for GEOVIA
+    metadata["bbox_metric_utm"] = {
+        "X_Min": round(x_min, 3),
+        "X_Max": round(x_max, 3),
+        "Y_Min": round(y_min, 3),
+        "Y_Max": round(y_max, 3),
+        "Width_Meters": round(x_max - x_min, 3),
+        "Height_Meters": round(y_max - y_min, 3)
+    }
+
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=4)
+
+    print("\n[✓] METADATA UPDATED WITH METRIC LIMITS FOR GEOVIA:")
+    print(f"  Lower-Left (South-West) -> X min: {round(x_min, 3)}, Y min: {round(y_min, 3)}")
+    print(f"  Upper-Right (North-East) -> X max: {round(x_max, 3)}, Y max: {round(y_max, 3)}")
+
 def main():
     project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
     abs_path = os.path.abspath(project_dir)
+    meta_path = os.path.join(abs_path, "metadata.json")
     
-    with open(os.path.join(abs_path, "metadata.json"), "r") as f:
+    with open(meta_path, "r") as f:
         metadata = json.load(f)
     
     # 3DExperience GDA requires metric CRS (UTM)
     target_epsg = metadata['epsg'] 
     print(f"\n[!] Target System: {target_epsg} (Metric UTM)")
 
-    # 1. Reproject Vectors (Buildings/Roads)
+    # 1. Update the metadata.json with the calculated metric bounds
+    update_metadata_metric_bounds(metadata, meta_path)
+
+    print("\n--- Starting Data Reprojection ---")
+
+    # 2. Reproject Vectors (Buildings/Roads)
     reproject_vectors(abs_path, target_epsg)
 
-    # 2. Reproject Rasters (Ortho & AI-Terrain)
-    raster_files = ["ortho_final.tif", "terrain_geoai_final.tif"]
+    # 3. Reproject Rasters (Ortho & AI-Terrain)
+    raster_files = ["ortho_final.tif", "terrain_geoai_final.tif", "terrain_elevation_pro.tif"]
     for r_file in raster_files:
         r_path = os.path.join(abs_path, r_file)
         if os.path.exists(r_path):
