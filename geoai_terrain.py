@@ -5,6 +5,8 @@ import numpy as np
 import rasterio
 from PIL import Image
 from transformers import pipeline
+import rasterio
+from rasterio.warp import reproject, Resampling
 from rasterio.transform import from_bounds
 import cv2
 
@@ -46,17 +48,34 @@ def generate_geoai_dem(project_folder=None):
     # AI depth is often "inverse". Normalize to 0-1.
     ai_depth = (ai_depth - ai_depth.min()) / (ai_depth.max() - ai_depth.min())
 
-    # 3. Load SRTM Baseline
-    with rasterio.open(srtm_path) as src:
-        srtm_data = src.read(1)
-        srtm_min, srtm_max = srtm_data.min(), srtm_data.max()
+    # 3. Load SRTM Baseline and prepare for Fusion
+    with rasterio.open(srtm_path) as srtm_src:
+        srtm_data = srtm_src.read(1)
+        srtm_meta = srtm_src.meta.copy()
         target_shape = srtm_data.shape
 
-    # 4. Statistical Fusion
-    ai_resized = cv2.resize(ai_depth, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_CUBIC)
-    print(f"[?] Fusing AI detail with SRTM heights ({srtm_min}m to {srtm_max}m)...")
-    fused_dem = (ai_resized * (srtm_max - srtm_min)) + srtm_min
+    # 4. Correct Coordinate-Aware Fusion
+    print("[?] Aligning AI depth map to SRTM coordinates...")
+    
+    # We create a temporary in-memory raster for the AI depth 
+    # and reproject it to match the SRTM grid exactly.
+    ai_aligned = np.zeros(target_shape, dtype='float32')
+    
+    # Define the transform for the AI data (based on the Ortho it came from)
+    with rasterio.open(ortho_path) as ortho_src:
+        reproject(
+            source=ai_depth,
+            destination=ai_aligned,
+            src_transform=ortho_src.transform,
+            src_crs=ortho_src.crs,
+            dst_transform=srtm_meta['transform'],
+            dst_crs=srtm_meta['crs'],
+            resampling=Resampling.bilinear
+        )
 
+    print(f"[?] Fusing aligned AI detail with heights...")
+    srtm_min, srtm_max = srtm_data.min(), srtm_data.max()
+    fused_dem = (ai_aligned * (srtm_max - srtm_min)) + srtm_min
     # 5. Save Final GeoAI DEM
     output_path = os.path.join(project_folder, "terrain_geoai_final.tif")
     bbox = meta['bbox']
