@@ -3,6 +3,7 @@ import json
 import geopandas as gpd
 import rasterio
 import numpy as np
+import sys
 from shapely.geometry import Point
 
 def get_elevation_at_point(raster, x, y):
@@ -18,8 +19,9 @@ def extrude_with_ai_terrain(project_dir=None):
     """
     Original logic: Samples AI terrain and saves building base and height.
     """
-    if project_dir is None:
-        project_dir = input("\nEnter project folder: ").strip()
+    
+# Check if folder name was passed as an argument, otherwise ask for it
+    project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip()
     
     abs_path = os.path.abspath(project_dir)
     building_path = os.path.join(abs_path, "building_utm.geojson")

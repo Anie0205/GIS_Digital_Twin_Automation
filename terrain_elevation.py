@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import requests
 import gzip
@@ -9,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import griddata
 
 def load_project():
-    project_dir = input("\nEnter the project folder name: ").strip().replace('"', '').replace("'", "")
+    project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip().replace('"', '').replace("'", "")
     if not os.path.isdir(project_dir):
         print(f"[X] Error: Folder '{project_dir}' not found.")
         return None, None

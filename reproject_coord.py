@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import geopandas as gpd
 import rasterio
@@ -83,7 +84,7 @@ def update_metadata_metric_bounds(metadata, meta_path):
     print(f"  Upper-Right (North-East) -> X max: {round(x_max, 3)}, Y max: {round(y_max, 3)}")
 
 def main():
-    project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
+    project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip()
     abs_path = os.path.abspath(project_dir)
     meta_path = os.path.join(abs_path, "metadata.json")
     
