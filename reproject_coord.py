@@ -13,18 +13,25 @@ def reproject_vectors(folder, target_epsg):
             
             print(f"[?] Reprojecting Vector: {file} -> {target_epsg}")
             gdf_utm = gdf.to_crs(target_epsg)
-            
-            # Save with _utm suffix for GDA identification
             output_name = file.replace(".geojson", "_utm.geojson")
-            gdf_utm.to_file(os.path.join(folder, output_name), driver='GeoJSON')
+            output_path = os.path.join(folder, output_name)
+            
+            try:
+                if os.path.exists(output_path): os.remove(output_path)
+                gdf_utm.to_file(output_path, driver='GeoJSON')
+            except PermissionError:
+                print(f"\n[!] ERROR: '{output_name}' is locked by Geovia/QGIS. Close to retry...")
+                input()
+                gdf_utm.to_file(output_path, driver='GeoJSON')
 
 def reproject_raster(input_path, target_epsg):
-    """Reprojects a GeoTIFF to the target UTM EPSG for 3DExperience ingestion."""
+    """Reprojects a GeoTIFF using the native, uncorrupted rasterio transform."""
     output_path = input_path.replace(".tif", "_utm.tif")
     
     with rasterio.open(input_path) as src:
         transform, width, height = calculate_default_transform(
             src.crs, target_epsg, src.width, src.height, *src.bounds)
+        
         kwargs = src.meta.copy()
         kwargs.update({
             'crs': target_epsg,
@@ -43,7 +50,7 @@ def reproject_raster(input_path, target_epsg):
                     src_crs=src.crs,
                     dst_transform=transform,
                     dst_crs=target_epsg,
-                    resampling=Resampling.bilinear # Smooths elevation/imagery
+                    resampling=Resampling.bilinear
                 )
     return output_path
 

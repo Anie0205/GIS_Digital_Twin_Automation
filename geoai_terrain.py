@@ -22,8 +22,11 @@ def load_data(project_dir):
     
     return meta, ortho_path, srtm_path
 
-def generate_geoai_dem():
-    project_folder = input("\nEnter project folder: ").strip()
+def generate_geoai_dem(project_folder=None):
+    # If orchestrator passes the folder, it skips the input prompt
+    if project_folder is None:
+        project_folder = input("\nEnter project folder: ").strip()
+        
     meta, ortho_path, srtm_path = load_data(project_folder)
     
     if not os.path.exists(ortho_path) or not os.path.exists(srtm_path):
@@ -40,7 +43,7 @@ def generate_geoai_dem():
     result = pipe(image)
     ai_depth = np.array(result["depth"]) 
     
-    # AI depth is often "inverse" (higher value = closer/higher). Normalize to 0-1.
+    # AI depth is often "inverse". Normalize to 0-1.
     ai_depth = (ai_depth - ai_depth.min()) / (ai_depth.max() - ai_depth.min())
 
     # 3. Load SRTM Baseline
@@ -50,10 +53,7 @@ def generate_geoai_dem():
         target_shape = srtm_data.shape
 
     # 4. Statistical Fusion
-    # Resize AI depth map to match SRTM grid resolution
     ai_resized = cv2.resize(ai_depth, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_CUBIC)
-    
-    # Scale AI relative shapes to the real-world meter range of the SRTM data
     print(f"[?] Fusing AI detail with SRTM heights ({srtm_min}m to {srtm_max}m)...")
     fused_dem = (ai_resized * (srtm_max - srtm_min)) + srtm_min
 
