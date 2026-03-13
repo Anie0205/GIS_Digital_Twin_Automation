@@ -1,5 +1,4 @@
 import ee
-import sys as s
 import geemap
 import os
 import json
@@ -111,9 +110,7 @@ def generate_ortho():
     print(" GeoAI Phase 2: Interactive Ortho Engine")
     print("==================================================")
     
-    import sys
-# Check if folder name was passed as an argument, otherwise ask for it
-    project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip()
+    project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
     abs_path = os.path.abspath(project_dir)
     final_path = os.path.join(abs_path, "ortho_final.tif")
     

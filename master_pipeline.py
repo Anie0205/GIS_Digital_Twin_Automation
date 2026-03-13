@@ -2,61 +2,51 @@ import subprocess
 import sys
 import os
 
-def run_pipeline():
-    # 1. Execute Phase 1 and capture the folder name it generates
-    print(f"\n{'='*20} PHASE 1: INITIALIZATION {'='*20}")
+def run_script(script_name):
+    """Executes a python script and waits for it to complete."""
+    print(f"\n{'='*60}")
+    print(f" >>> STARTING PHASE: {script_name}")
+    print(f"{'='*60}\n")
     
-    # We use Popen so you can still see the map and interact with the terminal
-    process = subprocess.Popen(
-        [sys.executable, "vectors_pipeline.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
+    try:
+        # We use sys.executable to ensure it uses the same python environment
+        process = subprocess.run([sys.executable, script_name], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"\n[X] Error occurred in {script_name}. Pipeline halted.")
+        return False
+    except FileNotFoundError:
+        print(f"\n[X] Script not found: {script_name}. Check your file names.")
+        return False
 
-    detected_folder = None
-    
-    # Stream the output to your terminal in real-time
-    for line in process.stdout:
-        print(line, end="")
-        if "PIPELINE_CONFIRMED_FOLDER:" in line:
-            detected_folder = line.split("PIPELINE_CONFIRMED_FOLDER:")[1].strip()
-
-    process.wait()
-
-    if not detected_folder:
-        print("\n[X] Pipeline failed: Could not capture folder name from Phase 1.")
-        return
-
-    # 2. Define the remaining scripts in order
-    subsequent_phases = [
-        "ortho_elevation.py",
-        "terrain_elevation.py",
-        "geoai_terrain.py",
-        "reproject_coord.py",
-        "geoai_height.py"
+def main():
+    # Define the execution order
+    pipeline = [
+        "vectors_pipeline.py",     # Phase 1: Init & Vector Extraction
+        "ortho_elevation.py",      # Phase 2: Satellite Texture
+        "terrain_elevation.py",    # Phase 3: Baseline Elevation (SRTM)
+        "geoai_terrain.py",        # Phase 4: AI Depth Fusion
+        "reproject_coord.py",      # Phase 5: Metric Reprojection
+        "geoai_height.py"          # Phase 6: 3D Building Extrusion
     ]
 
-    # 3. Automatically execute the rest of the scripts
-    print(f"\n[!] Handshake Successful. Project Folder Identified: {detected_folder}")
+    print("GeoAI Digital Twin - Master Orchestrator")
+    print("-----------------------------------------")
     
-    for script in subsequent_phases:
+    for script in pipeline:
         if not os.path.exists(script):
-            print(f"[?] Skipping {script} (File not found)")
-            continue
-            
-        print(f"\n{'='*20} RUNNING: {script} {'='*20}")
-        try:
-            # Passes the detected_folder as sys.argv[1] to each script
-            subprocess.run([sys.executable, script, detected_folder], check=True)
-        except subprocess.CalledProcessError:
-            print(f"\n[!] Critical error in {script}. Stopping pipeline.")
+            # Check for common naming variations
+            if script == "reproject_coord.py" and os.path.exists("reproject_coords.py"):
+                script = "reproject_coords.py"
+        
+        success = run_script(script)
+        if not success:
             break
     else:
-        print("\n" + "="*60)
-        print(f" SUCCESS: Digital Twin for '{detected_folder}' is complete.")
-        print("="*60)
+        print(f"\n{'='*60}")
+        print(" [✓] MASTER PIPELINE COMPLETE")
+        print(" Your digital twin is ready for GEOVIA Packager.")
+        print(f"{'='*60}")
 
 if __name__ == "__main__":
-    run_pipeline()
+    main()

@@ -1,131 +1,175 @@
+import ee
+import geemap
 import os
-import sys
 import json
+import math
 import requests
-import gzip
 import numpy as np
+import warnings
+from PIL import Image
 import rasterio
 from rasterio.transform import from_bounds
-from scipy.ndimage import gaussian_filter
-from scipy.interpolate import griddata
+from dotenv import load_dotenv  # <--- NEW IMPORT
 
-def load_project():
-    project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip().replace('"', '').replace("'", "")
-    if not os.path.isdir(project_dir):
-        print(f"[X] Error: Folder '{project_dir}' not found.")
-        return None, None
-    with open(os.path.join(project_dir, "metadata.json"), "r") as f:
-        return json.load(f), project_dir
+warnings.filterwarnings("ignore")
+Image.MAX_IMAGE_PIXELS = None
 
-def download_aws_skadi_tile(lat, lon, target_folder):
-    """Downloads enterprise-grade 30m SRTM tiles from the AWS Open Data Registry."""
-    lat_prefix = 'N' if lat >= 0 else 'S'
-    lon_prefix = 'E' if lon >= 0 else 'W'
-    
-    # Format: N28 / N28E077
-    lat_dir = f"{lat_prefix}{int(abs(lat)):02d}"
-    tile_name = f"{lat_prefix}{int(abs(lat)):02d}{lon_prefix}{int(abs(lon)):03d}"
-    
-    # AWS Mapzen Skadi URL
-    url = f"https://s3.amazonaws.com/elevation-tiles-prod/skadi/{lat_dir}/{tile_name}.hgt.gz"
-    
-    print(f"[?] Fetching High-Res AWS Skadi Tile: {tile_name}...")
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            hgt_path = os.path.join(target_folder, f"{tile_name}.hgt")
-            # Decompress the .gz file directly to .hgt
-            with open(hgt_path, 'wb') as f:
-                f.write(gzip.decompress(r.content))
-            print("  [✓] Download and extraction complete.")
-            return hgt_path
-        else:
-            print(f"  [!] AWS returned Error {r.status_code}. Tile coordinates may be invalid.")
-            return None
-    except Exception as e:
-        print(f"  [!] Connection Error: {e}")
-        return None
+# Load the environment variables from the .env file
+load_dotenv()  # <--- NEW COMMAND
 
-def main(folder=None):
-    if folder:
-        # If folder is provided, load metadata directly
-        with open(os.path.join(folder, "metadata.json"), "r") as f:
-            metadata = json.load(f)
-    else:
-        # Fallback to manual input if run as a standalone script
-        metadata, folder = load_project()
-    
-    if not metadata: return
+# --- CONFIGURATION ---
+GEE_PROJECT_ID = 'my-digital-twin-city'
 
-    # 1. Automated Enterprise Download
-    bbox = metadata['bbox'] # [north, south, east, west]
-    
-    # We use the south and west coordinates to identify the tile corner
-    hgt_path = download_aws_skadi_tile(bbox[1], bbox[3], folder)
-    
-    if not hgt_path:
-        print("[X] Could not acquire AWS elevation data.")
-        return
+# Now this will automatically pull from your .env file!
+MAPTILER_API_KEY = os.environ.get("MAPTILER_API_KEY")
 
-    # 2. Process High-Res HGT (3601x3601)
-    print(f"[?] Processing {os.path.basename(hgt_path)}...")
-    with open(hgt_path, 'rb') as f:
-        # Skadi tiles are 3601x3601 16-bit big-endian integers (30m resolution)
-        raw_data = np.fromfile(f, np.dtype('>i2'), 3601*3601).reshape((3601, 3601))
+# --- SLIPPY MAP TILE MATH ---
+def deg2num(lat_deg, lon_deg, zoom):
+    lat_rad = math.radians(lat_deg)
+    n = 2.0 ** zoom
+    xtile = int((lon_deg + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return (xtile, ytile)
 
-    # 3. Precision Crop Math
-    # Calculate the exact pixel bounds within the 1-degree tile
-    top_lat = np.floor(bbox[1]) + 1.0 # E.g., if south is 28.5, top of tile is 29.0
-    left_lon = np.floor(bbox[3])      # E.g., if west is 77.2, left of tile is 77.0
-    
-    row_start = int((top_lat - bbox[0]) * 3600)
-    row_end = int((top_lat - bbox[1]) * 3600)
-    col_start = int((bbox[3] - left_lon) * 3600)
-    col_end = int((bbox[2] - left_lon) * 3600)
-    
-    # Ensure we don't get empty arrays on tiny selections
-    row_start, row_end = min(row_start, row_end), max(row_start, row_end)
-    col_start, col_end = min(col_start, col_end), max(col_start, col_end)
-    
-    cropped = raw_data[row_start:row_end, col_start:col_end]
-    
-    # ... previous code: cropped = raw_data[row_start:row_end, col_start:col_end] ...
-    
-    print("[?] Calculating true ground slope (Trend Surface Analysis)...")
-    
-    # 1. Create coordinate grids for the cropped data
-    Y_idx, X_idx = np.mgrid[0:cropped.shape[0], 0:cropped.shape[1]]
-    
-    # Flatten the arrays to feed into our math solver
-    X_flat = X_idx.flatten()
-    Y_flat = Y_idx.flatten()
-    Z_flat = cropped.flatten()
-    
-    # 2. Fit a 2D Plane (Equation: Z = a*X + b*Y + c)
-    # This finds the absolute perfect "average slope" of the ground, ignoring radar noise
-    A = np.c_[X_flat, Y_flat, np.ones_like(X_flat)]
-    C, _, _, _ = np.linalg.lstsq(A, Z_flat, rcond=None)
-    
-    # 3. Generate the 1024x1024 Ultra-Smooth Glassy Grid
-    print("[?] Generating perfectly smooth 1024x1024 gradient surface...")
-    final_res = 1024
-    grid_y, grid_x = np.mgrid[0:cropped.shape[0]-1:complex(0, final_res), 
-                              0:cropped.shape[1]-1:complex(0, final_res)]
-                              
-    # Calculate the exact height for every single pixel on that perfect plane
-    elev_smooth = C[0]*grid_x + C[1]*grid_y + C[2]
+def num2deg(xtile, ytile, zoom):
+    n = 2.0 ** zoom
+    lon_deg = xtile / n * 360.0 - 180.0
+    lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
+    lat_deg = math.degrees(lat_rad)
+    return (lat_deg, lon_deg)
 
-    # 4. Save Final GeoTIFF
-    dem_path = os.path.join(folder, "terrain_elevation_pro.tif")
-    transform = from_bounds(bbox[3], bbox[1], bbox[2], bbox[0], final_res, final_res)
-    
-    with rasterio.open(
-        dem_path, 'w', driver='GTiff', height=final_res, width=final_res,
-        count=1, dtype='float32', crs='EPSG:4326', transform=transform
-    ) as dst:
-        dst.write(elev_smooth.astype('float32'), 1)
+# --- ENGINE 1: AUTHORIZED HIGH-RES MAPTILER API ---
+def download_maptiler_satellite(bbox, zoom, output_path, api_key):
+    # Added explicit check to immediately fail and trigger orchestrator fallback if key is missing
+    if not api_key:
+        raise ValueError("MAPTILER_API_KEY environment variable is not set.")
         
-    print(f"\n[✓] SUCCESS! Perfect glassy DEM saved: {dem_path}")
+    north, south, east, west = bbox[0], bbox[1], bbox[2], bbox[3]
+    
+    x_min, y_max = deg2num(south, west, zoom)
+    x_max, y_min = deg2num(north, east, zoom)
+    
+    print(f"\n[?] Fetching high-res tiles via MapTiler API at Zoom {zoom}...")
+    
+    tile_size = 512 
+    canvas_width = (x_max - x_min + 1) * tile_size
+    canvas_height = (y_max - y_min + 1) * tile_size
+    stitched_image = Image.new('RGB', (canvas_width, canvas_height))
+
+    for x in range(x_min, x_max + 1):
+        for y in range(y_min, y_max + 1):
+            url = f"https://api.maptiler.com/tiles/satellite-v2/{zoom}/{x}/{y}.jpg?key={api_key}"
+            
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                from io import BytesIO
+                img = Image.open(BytesIO(response.content))
+                if img.size[0] != tile_size:
+                    img = img.resize((tile_size, tile_size))
+                
+                paste_x = (x - x_min) * tile_size
+                paste_y = (y - y_min) * tile_size
+                stitched_image.paste(img, (paste_x, paste_y))
+            else:
+                raise Exception(f"API rejected tile {x},{y}. Status: {response.status_code}")
+
+    top_lat, left_lon = num2deg(x_min, y_min, zoom)
+    bottom_lat, right_lon = num2deg(x_max + 1, y_max + 1, zoom)
+    transform = from_bounds(left_lon, bottom_lat, right_lon, top_lat, canvas_width, canvas_height)
+    
+    img_array = np.array(stitched_image)
+    
+    print(f"[?] Saving georeferenced GeoTIFF to {output_path}...")
+    with rasterio.open(
+        output_path, 'w', driver='GTiff', height=canvas_height, width=canvas_width,
+        count=3, dtype=img_array.dtype, crs='EPSG:4326', transform=transform
+    ) as dst:
+        dst.write(img_array[:, :, 0], 1) 
+        dst.write(img_array[:, :, 1], 2) 
+        dst.write(img_array[:, :, 2], 3) 
+
+# --- ENGINE 2: PURE SENTINEL-2 BACKUP (GEE native) ---
+def sentinel_backup(roi, final_path, crs):
+    print("\n[?] Generating Sentinel-2 Baseline (10m, unlimited)...")
+    s2_collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+        .filterBounds(roi)
+        .filterDate('2025-01-01', '2026-12-31') 
+        .median())
+    
+    rgb = s2_collection.visualize(bands=['B4', 'B3', 'B2'], min=0, max=3000)
+    
+    geemap.ee_export_image(
+        rgb, filename=final_path, scale=10,
+        region=roi, crs=crs, file_per_band=False
+    )
+    print(f"[✓] Sentinel-2 backup ready!")
+
+# --- MAIN ORCHESTRATOR ---
+def generate_ortho():
+    print("\n==================================================")
+    print(" GeoAI Phase 2: Interactive Ortho Engine")
+    print("==================================================")
+    
+    project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
+    abs_path = os.path.abspath(project_dir)
+    final_path = os.path.join(abs_path, "ortho_final.tif")
+    
+    with open(os.path.join(abs_path, "metadata.json"), "r") as f:
+        metadata = json.load(f)
+    
+    bbox = metadata['bbox']  
+    region = [bbox[3], bbox[1], bbox[2], bbox[0]]  
+    target_crs = metadata['epsg']
+
+    if os.path.exists(final_path):
+        print(f"\n[!] PRIORITY 0: {final_path} already exists.")
+        overwrite = input("Do you want to overwrite it? (y/n) [n]: ").strip().lower()
+        if overwrite != 'y':
+            return
+
+    # --- THE INTERACTIVE MENU ---
+    print("\nSelect Image Engine:")
+    print("  1) MapTiler (High-Res 0.6m, requires API key)")
+    print("  2) Sentinel-2 (Standard 10m, GEE native)")
+    print("  3) Auto (Try MapTiler, auto-fallback to Sentinel-2)")
+    
+    choice = input("\nEnter choice (1/2/3) [3]: ").strip()
+    if choice not in ['1', '2', '3']:
+        choice = '3' # Defaults to Auto if you just press Enter
+
+    # --- MAPTILER EXECUTION ---
+    if choice in ['1', '3']:
+        try:
+            if not MAPTILER_API_KEY:
+                raise Exception("MAPTILER_API_KEY environment variable not configured.")
+                
+            download_maptiler_satellite(bbox, zoom=18, output_path=final_path, api_key=MAPTILER_API_KEY)
+            print(f"\n[✓] SUCCESS: Authorized High-Res Ortho saved!")
+            return 
+            
+        except Exception as e:
+            print(f"\n[X] MapTiler Failed: {e}")
+            if choice == '1':
+                print("[!] Exiting. Run again and select Sentinel-2 or Auto to use the fallback.")
+                return
+            else:
+                print("[?] Triggering Sentinel-2 fail-safe...")
+
+    # --- SENTINEL EXECUTION ---
+    if choice in ['2', '3']:
+        try:
+            try:
+                ee.Initialize(project=GEE_PROJECT_ID)
+            except:
+                ee.Authenticate()
+                ee.Initialize(project=GEE_PROJECT_ID)
+
+            roi = ee.Geometry.BBox(*region)
+            sentinel_backup(roi, final_path, target_crs)
+            
+        except Exception as e:
+            print(f"\n[X] CRITICAL FAILURE: GEE Sentinel-2 failed.")
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
-    main()
+    generate_ortho()

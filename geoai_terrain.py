@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import torch
 import numpy as np
@@ -27,7 +26,9 @@ def load_data(project_dir):
 
 def generate_geoai_dem(project_folder=None):
     # If orchestrator passes the folder, it skips the input prompt
-    project_folder = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip()
+    if project_folder is None:
+        project_folder = input("\nEnter project folder: ").strip()
+        
     meta, ortho_path, srtm_path = load_data(project_folder)
     
     if not os.path.exists(ortho_path) or not os.path.exists(srtm_path):
