@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import geopandas as gpd
 import rasterio
@@ -19,7 +20,11 @@ def extrude_with_ai_terrain(project_dir=None):
     Original logic: Samples AI terrain and saves building base and height.
     """
     if project_dir is None:
-        project_dir = input("\nEnter project folder: ").strip()
+        if len(sys.argv) > 1:
+            project_dir = sys.argv[1]
+            print(f"\n[!] Auto-loaded project folder: {project_dir}")
+        else:
+            project_dir = input("\nEnter project folder: ").strip()
     
     abs_path = os.path.abspath(project_dir)
     building_path = os.path.join(abs_path, "building_utm.geojson")

@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import torch
 import numpy as np
@@ -25,10 +26,13 @@ def load_data(project_dir):
     return meta, ortho_path, srtm_path
 
 def generate_geoai_dem(project_folder=None):
-    # If orchestrator passes the folder, it skips the input prompt
     if project_folder is None:
-        project_folder = input("\nEnter project folder: ").strip()
-        
+        if len(sys.argv) > 1:
+            project_folder = sys.argv[1]
+            print(f"\n[!] Auto-loaded project folder: {project_folder}")
+        else:
+            project_folder = input("\nEnter project folder: ").strip()
+            
     meta, ortho_path, srtm_path = load_data(project_folder)
     
     if not os.path.exists(ortho_path) or not os.path.exists(srtm_path):

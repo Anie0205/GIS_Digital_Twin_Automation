@@ -233,5 +233,9 @@ def main():
 
     print(f"\n[✓] Phase 1 Complete! Data safely deposited into ./{project_name}/")
 
+    # Save the project name to a temporary file for the master pipeline to read
+    with open(".current_project.txt", "w") as f:
+        f.write(project_name)
+
 if __name__ == "__main__":
     main()

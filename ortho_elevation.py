@@ -1,6 +1,7 @@
 import ee
 import geemap
 import os
+import sys
 import json
 import math
 import requests
@@ -107,10 +108,16 @@ def sentinel_backup(roi, final_path, crs):
 # --- MAIN ORCHESTRATOR ---
 def generate_ortho():
     print("\n==================================================")
-    print(" GeoAI Phase 2: Interactive Ortho Engine")
+    print(" GeoAI Phase: Interactive Ortho Engine")
     print("==================================================")
     
-    project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
+    # --- UPDATE THIS SECTION ---
+    if len(sys.argv) > 1:
+        project_dir = sys.argv[1]
+        print(f"\n[!] Auto-loaded project folder: {project_dir}")
+    else:
+        project_dir = input("\nEnter project folder (e.g., Lajpat_Nagar): ").strip()
+        
     abs_path = os.path.abspath(project_dir)
     final_path = os.path.join(abs_path, "ortho_final.tif")
     

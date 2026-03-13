@@ -2,15 +2,16 @@ import subprocess
 import sys
 import os
 
-def run_script(script_name):
+# 1. Update run_script to accept extra arguments
+def run_script(script_name, *args):
     """Executes a python script and waits for it to complete."""
     print(f"\n{'='*60}")
     print(f" >>> STARTING PHASE: {script_name}")
     print(f"{'='*60}\n")
     
     try:
-        # We use sys.executable to ensure it uses the same python environment
-        process = subprocess.run([sys.executable, script_name], check=True)
+        # Pass the extra arguments (like folder name) to the script
+        process = subprocess.run([sys.executable, script_name, *args], check=True)
         return True
     except subprocess.CalledProcessError as e:
         print(f"\n[X] Error occurred in {script_name}. Pipeline halted.")
@@ -20,26 +21,38 @@ def run_script(script_name):
         return False
 
 def main():
-    # Define the execution order
     pipeline = [
-        "vectors_pipeline.py",     # Phase 1: Init & Vector Extraction
-        "ortho_elevation.py",      # Phase 2: Satellite Texture
-        "terrain_elevation.py",    # Phase 3: Baseline Elevation (SRTM)
-        "geoai_terrain.py",        # Phase 4: AI Depth Fusion
-        "reproject_coord.py",      # Phase 5: Metric Reprojection
-        "geoai_height.py"          # Phase 6: 3D Building Extrusion
+        "vectors_pipeline.py",     
+        "ortho_elevation.py",      
+        "terrain_elevation.py",    
+        "geoai_terrain.py",        
+        "reproject_coord.py",      
+        "geoai_height.py"          
     ]
 
     print("GeoAI Digital Twin - Master Orchestrator")
     print("-----------------------------------------")
     
+    project_folder = None # Store the folder name here
+
     for script in pipeline:
         if not os.path.exists(script):
-            # Check for common naming variations
             if script == "reproject_coord.py" and os.path.exists("reproject_coords.py"):
                 script = "reproject_coords.py"
         
-        success = run_script(script)
+        # 2. Handle Phase 1 and extract the folder name
+        if script == "vectors_pipeline.py":
+            success = run_script(script)
+            if success and os.path.exists(".current_project.txt"):
+                with open(".current_project.txt", "r") as f:
+                    project_folder = f.read().strip()
+        else:
+            # 3. Pass the folder name to all subsequent scripts
+            if project_folder:
+                success = run_script(script, project_folder)
+            else:
+                success = run_script(script)
+
         if not success:
             break
     else:
@@ -47,6 +60,10 @@ def main():
         print(" [✓] MASTER PIPELINE COMPLETE")
         print(" Your digital twin is ready for GEOVIA Packager.")
         print(f"{'='*60}")
+
+    # 4. Clean up the temp file
+    if os.path.exists(".current_project.txt"):
+        os.remove(".current_project.txt")
 
 if __name__ == "__main__":
     main()
