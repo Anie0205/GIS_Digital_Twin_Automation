@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GIS Digital Twin Automator</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #fff; overflow: hidden; }
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+        
+        /* UI Overlays */
+        .overlay { position: absolute; z-index: 10; width: 100%; display: flex; justify-content: center; pointer-events: none; }
+        
+        /* Search Bar */
+        #search-container { top: 20%; transition: top 0.8s ease-in-out; pointer-events: auto; }
+        #search-container.active { top: 5%; }
+        #location-input { padding: 15px 25px; width: 400px; border-radius: 30px; border: none; background: rgba(30, 30, 30, 0.85); color: #00ffcc; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(5px); outline: none; border: 1px solid #00ffcc; transition: all 0.3s; }
+        #location-input::placeholder { color: #555; }
+        #location-input:focus { box-shadow: 0 0 20px rgba(0, 255, 204, 0.4); }
+
+        /* Terminal Logs */
+        #log-container { top: 40%; flex-direction: column; align-items: center; }
+        .log-stage { font-size: 24px; font-weight: 300; letter-spacing: 2px; color: #00ffcc; opacity: 0; transform: translateY(20px); transition: opacity 0.8s ease, transform 0.8s ease; text-align: center; background: rgba(0, 0, 0, 0.6); padding: 15px 30px; border-radius: 10px; backdrop-filter: blur(4px); margin-bottom: 10px; }
+        .log-stage.visible { opacity: 1; transform: translateY(0); }
+        .log-subtext { font-size: 14px; color: #aaa; margin-top: 5px; }
+
+        /* Final Action Buttons */
+        #actions-container { bottom: 10%; opacity: 0; transition: opacity 1s ease; pointer-events: auto; gap: 20px; }
+        #actions-container.visible { opacity: 1; display: flex; }
+        .action-btn { padding: 12px 24px; border-radius: 8px; border: none; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s; background: rgba(30, 30, 30, 0.9); color: #fff; border: 1px solid #555; }
+        .action-btn:hover { background: #00ffcc; color: #000; box-shadow: 0 0 15px rgba(0, 255, 204, 0.5); border-color: #00ffcc; }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div id="search-container" class="overlay">
+        <input type="text" id="location-input" placeholder="Enter location (e.g., JP Nagar)..." onkeypress="handleSearch(event)">
+        <select id="imagery-select" style="margin-left: 10px; padding: 15px; border-radius: 30px; background: rgba(30, 30, 30, 0.85); color: #00ffcc; border: 1px solid #00ffcc; outline: none; font-size: 16px; cursor: pointer; backdrop-filter: blur(5px);">
+            <option value="3">Imagery: Auto (Best Available)</option>
+            <option value="1">Imagery: MapTiler (High-Res 0.6m)</option>
+            <option value="2">Imagery: Sentinel-2 (Standard 10m)</option>
+        </select>
+    </div>
+
+    <div id="log-container" class="overlay">
+        <div id="current-log" class="log-stage">
+            <div id="log-title">Initializing...</div>
+            <div id="log-detail" class="log-subtext">Waiting for input</div>
+        </div>
+    </div>
+
+    <div id="actions-container" class="overlay">
+        <button class="action-btn" onclick="downloadDataset()">Download Dataset</button>
+        <button class="action-btn" id="btn-3ds">Upload to 3DS</button>
+        <button class="action-btn" id="btn-visualise">Visualise 3D Model</button>
+    </div>
+
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <div id="confirm-container" class="overlay" style="top: 85%; opacity: 0; transition: opacity 0.5s; pointer-events: none;">
+        <button class="action-btn" id="confirm-btn" style="background: #28a745; border-color: #28a745; pointer-events: auto;" onclick="confirmMapSelection()">Confirm Map Selection</button>
+    </div>
+
+    <script>
+        // Initialize Map (Dark Theme)
+        const map = L.map('map', { zoomControl: false }).setView([20.5937, 78.9629], 5);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CARTO'
+        }).addTo(map);
+
+        const logElement = document.getElementById('current-log');
+        const titleElement = document.getElementById('log-title');
+        const detailElement = document.getElementById('log-detail');
+        const confirmContainer = document.getElementById('confirm-container');
+        const searchContainer = document.getElementById('search-container');
+
+        // --- NEW: RIGHT-CLICK & DRAG MAP SELECTION LOGIC ---
+        let startLatLng = null;
+        let selectionRect = null;
+        let finalBBox = null;
+
+        // Disable the default right-click context menu on the map
+        document.getElementById('map').addEventListener('contextmenu', e => e.preventDefault());
+
+        map.on('mousedown', function(e) {
+            if (e.originalEvent.button === 2) { // 2 is Right-Click
+                map.dragging.disable(); // Stop map from panning
+                startLatLng = e.latlng;
+                
+                if (selectionRect) {
+                    map.removeLayer(selectionRect);
+                }
+                
+                // Draw a yellow rectangle matching the Python Tkinter style
+                selectionRect = L.rectangle([startLatLng, startLatLng], {
+                    color: "#ffff00", 
+                    weight: 3,
+                    fillColor: "#ffff00",
+                    fillOpacity: 0.2
+                }).addTo(map);
+                
+                confirmContainer.style.opacity = '0'; // Hide confirm button while drawing
+            }
+        });
+
+        map.on('mousemove', function(e) {
+            if (startLatLng && selectionRect && e.originalEvent.buttons === 2) {
+                selectionRect.setBounds([startLatLng, e.latlng]);
+            }
+        });
+
+        map.on('mouseup', function(e) {
+            if (e.originalEvent.button === 2 && startLatLng) {
+                map.dragging.enable(); // Re-enable panning
+                finalBBox = selectionRect.getBounds();
+                startLatLng = null;
+                
+                // Show the confirm button
+                confirmContainer.style.opacity = '1';
+            }
+        });
+
+        function confirmMapSelection() {
+            if (!finalBBox) return;
+
+            confirmContainer.style.opacity = '0';
+            searchContainer.classList.add('active'); 
+            
+            const n = finalBBox.getNorth();
+            const s = finalBBox.getSouth();
+            const e = finalBBox.getEast();
+            const w = finalBBox.getWest();
+            
+            const bboxString = `${n},${s},${e},${w}`;
+            const imageryChoice = document.getElementById('imagery-select').value; // <--- GRAB CHOICE
+            startPipeline(bboxString, "Custom Map Selection", imageryChoice);      // <--- PASS IT
+        }  
+
+        // --- EXISTING TEXT SEARCH LOGIC ---
+        async function handleSearch(event) {
+            if (event.key === 'Enter') {
+                const location = event.target.value;
+                if(!location) return;
+
+                searchContainer.classList.add('active');
+                
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}`);
+                    const data = await res.json();
+                    if(data && data.length > 0) {
+                        map.flyTo([data[0].lat, data[0].lon], 14, { duration: 2.5 });
+                    }
+                } catch(e) { console.error("Geocoding failed"); }
+
+                const imageryChoice = document.getElementById('imagery-select').value; // <--- GRAB CHOICE
+                startPipeline(location, location, imageryChoice);                      // <--- PASS IT
+            }
+        }
+
+        function updateLog(title, detail) {
+            logElement.classList.remove('visible');
+            setTimeout(() => {
+                titleElement.innerText = title;
+                detailElement.innerText = detail || '';
+                logElement.classList.add('visible');
+            }, 600);
+        }
+
+       function startPipeline(targetData, displayName, imageryChoice) {
+            if(window.pipelineStream) window.pipelineStream.close();
+
+            // Pass imagery choice to the backend stream URL
+            const streamUrl = `/stream_pipeline?target=${encodeURIComponent(targetData)}&name=${encodeURIComponent(displayName)}&imagery=${encodeURIComponent(imageryChoice)}`;
+            window.pipelineStream = new EventSource(streamUrl);
+
+            window.pipelineStream.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                updateLog(data.stage, data.detail);
+
+                if (data.status === 'complete') {
+                    window.pipelineStream.close();
+                    setTimeout(() => {
+                        logElement.classList.remove('visible');
+                        document.getElementById('actions-container').classList.add('visible');
+                    }, 2000);
+                }
+            };
+        }
+    </script>
+</body>
+</html>

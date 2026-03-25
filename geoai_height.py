@@ -61,7 +61,7 @@ def extrude_with_ai_terrain(project_dir=None):
     output_path = os.path.join(abs_path, "buildings_3d_ready.geojson")
     buildings.to_file(output_path, driver='GeoJSON')
     
-    print(f"\n[✓] SUCCESS: 3D-Ready Buildings saved: {output_path}")
+    print(f"\n[OK] SUCCESS: 3D-Ready Buildings saved: {output_path}")
     
 if __name__ == "__main__":
     extrude_with_ai_terrain()

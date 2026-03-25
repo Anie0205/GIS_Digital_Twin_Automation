@@ -37,7 +37,7 @@ def download_aws_skadi_tile(lat, lon, target_folder):
             # Decompress the .gz file directly to .hgt
             with open(hgt_path, 'wb') as f:
                 f.write(gzip.decompress(r.content))
-            print("  [✓] Download and extraction complete.")
+            print("  [OK] Download and extraction complete.")
             return hgt_path
         else:
             print(f"  [!] AWS returned Error {r.status_code}. Tile coordinates may be invalid.")
@@ -119,7 +119,7 @@ def main(folder=None):
     ) as dst:
          dst.write(elev_smooth.astype('float32'), 1)
         
-    print(f"\n[✓] SUCCESS! Perfect glassy DEM saved: {dem_path}")
+    print(f"\n[OK] SUCCESS! Perfect glassy DEM saved: {dem_path}")
 
 if __name__ == "__main__":
     main()

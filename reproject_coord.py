@@ -79,7 +79,7 @@ def update_metadata_metric_bounds(metadata, meta_path):
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=4)
 
-    print("\n[✓] METADATA UPDATED WITH METRIC LIMITS FOR GEOVIA:")
+    print("\n[OK] METADATA UPDATED WITH METRIC LIMITS FOR GEOVIA:")
     print(f"  Lower-Left (South-West) -> X min: {round(x_min, 3)}, Y min: {round(y_min, 3)}")
     print(f"  Upper-Right (North-East) -> X max: {round(x_max, 3)}, Y max: {round(y_max, 3)}")
 
@@ -114,7 +114,7 @@ def main():
         if os.path.exists(r_path):
             reproject_raster(r_path, target_epsg)
 
-    print(f"\n[✓] GDA Prep Complete! Use the *_utm files for 3DExperience.")
+    print(f"\n[OK] GDA Prep Complete! Use the *_utm files for 3DExperience.")
 
 if __name__ == "__main__":
     main()

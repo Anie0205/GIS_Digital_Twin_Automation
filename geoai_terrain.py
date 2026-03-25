@@ -91,7 +91,7 @@ def generate_geoai_dem(project_folder=None):
     ) as dst:
         dst.write(fused_dem.astype('float32'), 1)
 
-    print(f"\n[✓] SUCCESS: GeoAI Terrain generated: {output_path}")
+    print(f"\n[OK] SUCCESS: GeoAI Terrain generated: {output_path}")
 
 if __name__ == "__main__":
     generate_geoai_dem()
