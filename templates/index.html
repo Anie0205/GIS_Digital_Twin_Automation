@@ -64,6 +64,7 @@
     </div>
 
     <script>
+        let currentProjectName = "";
         // Initialize Map (Dark Theme)
         const map = L.map('map', { zoomControl: false }).setView([20.5937, 78.9629], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -167,9 +168,20 @@
                 logElement.classList.add('visible');
             }, 600);
         }
+        function downloadDataset() {
+            if (!currentProjectName) {
+                alert("No project data available to download.");
+                return;
+            }
+            // Redirect the browser to the Flask download route
+            window.location.href = `/download/${currentProjectName}`;
+        }
 
        function startPipeline(targetData, displayName, imageryChoice) {
             if(window.pipelineStream) window.pipelineStream.close();
+
+            // Save the formatted project name for the download function
+            currentProjectName = displayName.replace(/ /g, "_"); 
 
             // Pass imagery choice to the backend stream URL
             const streamUrl = `/stream_pipeline?target=${encodeURIComponent(targetData)}&name=${encodeURIComponent(displayName)}&imagery=${encodeURIComponent(imageryChoice)}`;

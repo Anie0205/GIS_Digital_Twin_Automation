@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import glob
 import os
 
 def run_script(script_name, *args):
@@ -16,6 +17,48 @@ def run_script(script_name, *args):
     except FileNotFoundError:
         print(f"\n[X] Script not found: {script_name}.", flush=True)
         return False
+    
+def cleanup_intermediate_files(project_folder):
+    if not project_folder or not os.path.exists(project_folder):
+        return
+        
+    print(f"\n{'='*60}", flush=True)
+    print(" >>> STARTING PHASE: Cleanup", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    
+    print(f"[?] Cleaning up intermediate files in '{project_folder}'...", flush=True)
+    files_to_delete = []
+
+    # 1. Delete original unprojected vectors and intermediate UTM vectors
+    # We only want to keep the final 3DEXPERIENCE-ready files
+    all_geojson = glob.glob(os.path.join(project_folder, "*.geojson"))
+    for f in all_geojson:
+        if not f.endswith("_3d_ready.geojson"):
+            files_to_delete.append(f)
+
+    # 2. Delete raw HGT tiles downloaded from AWS
+    files_to_delete.extend(glob.glob(os.path.join(project_folder, "*.hgt")))
+
+    # 3. Delete unprojected baseline rasters (keeping only the _utm.tif versions)
+    unprojected_rasters = [
+        "ortho_final.tif", 
+        "terrain_elevation_pro.tif", 
+        "terrain_geoai_final.tif",
+        "terrain_elevation_pro_utm.tif" # Keep the GeoAI one, drop the base pro one
+    ]
+    for raster in unprojected_rasters:
+        files_to_delete.append(os.path.join(project_folder, raster))
+
+    count = 0
+    for f in files_to_delete:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+                count += 1
+            except Exception as e:
+                print(f"  [!] Could not delete {os.path.basename(f)}: {e}")
+                
+    print(f"[OK] Removed {count} intermediate files to save space.", flush=True)
 
 def main():
     # If run from the Web UI, grab the arguments
@@ -69,6 +112,9 @@ def main():
         if not success:
             break
     else:
+        # --> ADD CLEANUP CALL HERE <--
+        cleanup_intermediate_files(project_folder)
+        
         print(f"\n{'='*60}", flush=True)
         print(" [OK] MASTER PIPELINE COMPLETE", flush=True)
         print(" Your digital twin is ready for GEOVIA Packager.", flush=True)

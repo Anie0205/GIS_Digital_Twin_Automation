@@ -17,17 +17,18 @@ def drape_geometry(geom, dem):
     """Physically injects Z-altitude to create true 3D [X, Y, Z] geometries."""
     if geom is None or geom.is_empty: return geom
     
-    if geom.type == 'Point':
+    # FIX: Changed geom.type to geom.geom_type to clear Shapely warnings
+    if geom.geom_type == 'Point':
         return Point(geom.x, geom.y, get_elevation_at_point(dem, geom.x, geom.y))
-    elif geom.type == 'LineString':
+    elif geom.geom_type == 'LineString':
         return LineString([(x, y, get_elevation_at_point(dem, x, y)) for x, y, *_ in geom.coords])
-    elif geom.type == 'Polygon':
+    elif geom.geom_type == 'Polygon':
         ext = [(x, y, get_elevation_at_point(dem, x, y)) for x, y, *_ in geom.exterior.coords]
         ints = [[(x, y, get_elevation_at_point(dem, x, y)) for x, y, *_ in hole.coords] for hole in geom.interiors]
         return Polygon(ext, ints)
-    elif geom.type == 'MultiLineString':
+    elif geom.geom_type == 'MultiLineString':
         return MultiLineString([drape_geometry(line, dem) for line in geom.geoms])
-    elif geom.type == 'MultiPolygon':
+    elif geom.geom_type == 'MultiPolygon':
         return MultiPolygon([drape_geometry(poly, dem) for poly in geom.geoms])
         
     return geom
@@ -48,7 +49,7 @@ def process_datasets_for_3dexperience(project_dir=None):
         return
 
     # Extract the EPSG code (e.g., '32643' from 'EPSG:32643')
-    with open(meta_path, 'r') as f:
+    with open(meta_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     epsg_code = metadata['epsg'].split(':')[-1]
 
@@ -89,7 +90,8 @@ def process_datasets_for_3dexperience(project_dir=None):
                 gdf.to_file(output_path, driver='GeoJSON')
                 
                 # 3. CRS HACK: Inject the explicit OGC URN CRS so Dassault reads the metrics
-                with open(output_path, 'r') as f:
+                # FIX: Added encoding='utf-8' to prevent decoding crashes on international characters
+                with open(output_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 data['crs'] = {
@@ -97,7 +99,7 @@ def process_datasets_for_3dexperience(project_dir=None):
                     "properties": { "name": f"urn:ogc:def:crs:EPSG::{epsg_code}" }
                 }
                 
-                with open(output_path, 'w') as f:
+                with open(output_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f)
                 
                 print(f"     [OK] Saved {output_name} with explicit CRS EPSG:{epsg_code}")
