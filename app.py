@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, Response, send_file
+from flask_cors import CORS # <-- Import this
 import time
 import json
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/')
 def index():
@@ -79,4 +81,5 @@ def download_project(project_name):
     return send_file(f"{zip_filename}.zip", as_attachment=True)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Hugging Face requires apps to run on port 7860 and host 0.0.0.0
+    app.run(host="0.0.0.0", port=7860)
