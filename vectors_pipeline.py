@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import datetime
 import tkinter as tk
 import tkintermapview
@@ -176,6 +177,13 @@ def main():
     print("\n[?] Adjusting selection to meet Dassault GEOVIA 1:1 metric aspect ratio...")
     bbox_squared, metric_bounds = force_perfect_square_and_metrics(bbox_raw, target_epsg)
 
+    # --- NEW: HARD AREA LIMIT ---
+    max_allowed_meters = 3000 # 3km max limit
+    if metric_bounds['Side_Length_Meters'] > max_allowed_meters:
+        print(f"\n[X] CRITICAL ERROR: Selected area ({metric_bounds['Side_Length_Meters']}m) is too large!")
+        print(f"[X] Maximum allowed size is {max_allowed_meters}m to prevent server crashes.")
+        sys.exit(1)
+
     os.makedirs(project_name, exist_ok=True)
     metadata = {
         "location": project_name.replace("_", " "),
@@ -216,9 +224,12 @@ def main():
                 out_path = os.path.join(project_name, f"{target}.geojson")
                 clean_gdf.to_file(out_path, driver="GeoJSON")
                 print(f"  [OK] Saved {target}.geojson")
+            
+            # --- NEW: ANTI-BAN RATE LIMITING ---
+            time.sleep(1.5) 
+            
         except Exception as e: 
             print(f"  [X] Failed '{target}': {e}")
-
     print(f"\n[OK] Phase 1 Complete! Data safely deposited into ./{project_name}/")
 
     with open(".current_project.txt", "w") as f:

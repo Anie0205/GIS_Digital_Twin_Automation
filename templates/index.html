@@ -108,6 +108,8 @@
 
     <div class="overlay-center">
         <div class="search-bar">
+            <input type="text" id="project-name-input" placeholder="PROJECT NAME..." style="width: 180px; border-right: 1px solid var(--border-subtle); margin-right: 10px;">
+            
             <input type="text" id="location-input" placeholder="SCAN COORDINATES OR REGION NAME..." onkeypress="handleSearch(event)">
             <select id="imagery-select">
                 <option value="3">AUTO_LINK</option>
@@ -182,7 +184,14 @@
             if (!finalBBox) return;
             confirmContainer.style.opacity = '0';
             const n = finalBBox.getNorth(), s = finalBBox.getSouth(), e = finalBBox.getEast(), w = finalBBox.getWest();
-            startPipeline(`${n},${s},${e},${w}`, "Strategic_Site", document.getElementById('imagery-select').value);
+            
+            // --- NEW: Grab the name from the input box ---
+            let customName = document.getElementById('project-name-input').value.trim();
+            if (customName === "") {
+                customName = "Strategic_Site"; // Fallback if they leave it empty
+            }
+            
+            startPipeline(`${n},${s},${e},${w}`, customName, document.getElementById('imagery-select').value);
         }
 
         async function handleSearch(event) {
@@ -194,7 +203,12 @@
                     const data = await res.json();
                     if(data.length > 0) map.flyTo([data[0].lat, data[0].lon], 14);
                 } catch(e) {}
-                startPipeline(location, location, document.getElementById('imagery-select').value);
+                
+                // --- NEW: Use custom name if provided, otherwise use the location name ---
+                let customName = document.getElementById('project-name-input').value.trim();
+                let displayName = customName !== "" ? customName : location;
+                
+                startPipeline(location, displayName, document.getElementById('imagery-select').value);
             }
         }
 

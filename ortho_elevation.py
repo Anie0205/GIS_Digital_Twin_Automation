@@ -96,7 +96,12 @@ def generate_ortho():
     elif len(sys.argv) > 1:
         project_dir = sys.argv[1]
         print(f"\n[!] Auto-loaded project folder: {project_dir}")
-        choice = '3' 
+        print("\nSelect Image Engine:")
+        print("  1) MapTiler (High-Res 0.6m, requires API key)")
+        print("  2) Sentinel-2 (Standard 10m, GEE native)")
+        print("  3) Auto (Try MapTiler, auto-fallback to Sentinel-2)")
+        choice = input("\nEnter choice (1/2/3) [3]: ").strip()
+        if choice not in ['1', '2', '3']: choice = '3'
     # --- TERMINAL MODE ---
     else:
         project_dir = input("\nEnter project folder: ").strip()
@@ -125,9 +130,24 @@ def generate_ortho():
     if choice in ['1', '3']:
         try:
             if not MAPTILER_API_KEY: raise Exception("MAPTILER_API_KEY environment variable not configured.")
-            download_maptiler_satellite(bbox, zoom=18, output_path=final_path, api_key=MAPTILER_API_KEY)
+            
+            # --- NEW DYNAMIC ZOOM LOGIC ---
+            side_length = metadata.get('bbox_metric_utm', {}).get('Side_Length_Meters', 1000)
+            if side_length <= 1000:
+                calc_zoom = 18 # Ultra-high res for small areas
+            elif side_length <= 2500:
+                calc_zoom = 17 # High res for medium areas
+            else:
+                calc_zoom = 16 # Standard res for large areas
+                
+            print(f"[!] Area size is ~{int(side_length)}m. Dynamically selected Zoom {calc_zoom}.")
+            
+            download_maptiler_satellite(bbox, zoom=calc_zoom, output_path=final_path, api_key=MAPTILER_API_KEY)
+            # ------------------------------
+            
             print(f"\n[OK] SUCCESS: Authorized High-Res Ortho saved!")
-            return 
+            return
+        
         except Exception as e:
             print(f"\n[X] MapTiler Failed: {e}")
             if choice == '1':

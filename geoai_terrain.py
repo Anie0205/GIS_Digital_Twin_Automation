@@ -43,13 +43,29 @@ def generate_geoai_dem(project_folder=None):
     print(f"[?] Loading GeoAI Model onto {DEVICE}...")
     pipe = pipeline("depth-estimation", model=MODEL_ID, device=DEVICE)
 
-    # 2. Run AI Inference on High-Res Ortho
-    print("[?] AI inferring micro-terrain shapes from satellite imagery...")
+    # 2. Run AI Inference on High-Res Ortho (PATCH-BASED APPROACH)
+    print("[?] AI inferring micro-terrain shapes (Patch Processing to prevent Out-Of-Memory)...")
     image = Image.open(ortho_path).convert("RGB")
-    result = pipe(image)
-    ai_depth = np.array(result["depth"]) 
+    img_width, img_height = image.size
     
-    # AI depth is often "inverse". Normalize to 0-1.
+    # Create an empty array for the final depth map
+    ai_depth = np.zeros((img_height, img_width), dtype=np.float32)
+    patch_size = 1024
+
+    for y in range(0, img_height, patch_size):
+        for x in range(0, img_width, patch_size):
+            # Calculate patch boundaries
+            box = (x, y, min(x + patch_size, img_width), min(y + patch_size, img_height))
+            patch = image.crop(box)
+            
+            # Run inference on the small patch
+            res = pipe(patch)
+            patch_depth = np.array(res["depth"])
+            
+            # Paste the result back into the master array
+            ai_depth[y:box[3], x:box[2]] = patch_depth
+
+    # Normalize the combined depth map to 0-1
     ai_depth = (ai_depth - ai_depth.min()) / (ai_depth.max() - ai_depth.min())
 
     # 3. Load SRTM Baseline and prepare for Fusion

@@ -36,6 +36,9 @@ def stream_pipeline():
             "geoai_height.py": ("GeoAI Height Extrusion", "Calculating final 3D building metrics...")
         }
 
+        # Keep track of the current stage so we can attach details to it
+        current_stage = "Initializing"
+
         try:
             # Call master_pipeline instead of individual scripts
             process = subprocess.Popen(
@@ -50,14 +53,23 @@ def stream_pipeline():
             
             # Read master_pipeline's console output live
             for line in process.stdout:
-                print(line, end="") # Still print to Flask terminal for debugging
+                print(line, end="") # Still print to Flask terminal for backend debugging
+                clean_line = line.strip()
                 
-                # If master_pipeline announces a new phase, trigger a UI update
+                if not clean_line:
+                    continue # Skip empty blank lines
+                
+                # 1. Check for a major phase change
                 if ">>> STARTING PHASE:" in line:
                     script_name = line.split(":")[-1].strip()
                     if script_name in stage_map:
-                        stage, detail = stage_map[script_name]
-                        yield push_update(stage, detail)
+                        current_stage, default_detail = stage_map[script_name]
+                        yield push_update(current_stage, f"Starting {current_stage}...")
+                        
+                # 2. Check for detailed status updates from inside the scripts!
+                elif clean_line.startswith("[") or "SUCCESS" in clean_line or "ERROR" in clean_line:
+                    # Push the actual underlying script log to the frontend
+                    yield push_update(current_stage, clean_line)
 
             process.wait()
             

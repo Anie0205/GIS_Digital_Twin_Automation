@@ -5,9 +5,10 @@ import requests
 import gzip
 import numpy as np
 import rasterio
+from rasterio.merge import merge
 from rasterio.transform import from_bounds
-from scipy.ndimage import gaussian_filter
-from scipy.interpolate import griddata
+#from scipy.ndimage import gaussian_filter
+#from scipy.interpolate import griddata
 
 def load_project():
     project_dir = sys.argv[1] if len(sys.argv) > 1 else input("Enter project folder: ").strip().replace('"', '').replace("'", "")
@@ -56,44 +57,44 @@ def main(folder=None):
         metadata, folder = load_project()
     
     if not metadata: return
-     # 1. Automated Enterprise Download
+    # 1. Automated Enterprise Download (MULTI-TILE SUPPORT)
     bbox = metadata['bbox'] # [north, south, east, west]
     
-    # We use the south and west coordinates to identify the tile corner
-    hgt_path = download_aws_skadi_tile(bbox[1], bbox[3], folder)
+    # Find all integer Lat/Lon blocks that intersect our bbox
+    lat_min, lat_max = int(np.floor(bbox[1])), int(np.floor(bbox[0]))
+    lon_min, lon_max = int(np.floor(bbox[3])), int(np.floor(bbox[2]))
     
-    if not hgt_path:
+    downloaded_tiles = []
+    for lat in range(lat_min, lat_max + 1):
+        for lon in range(lon_min, lon_max + 1):
+            tile_path = download_aws_skadi_tile(lat, lon, folder)
+            if tile_path:
+                downloaded_tiles.append(tile_path)
+                
+    if not downloaded_tiles:
         print("[X] Could not acquire AWS elevation data.")
         return
 
-    # 2. Process High-Res HGT (3601x3601)
-    print(f"[?] Processing {os.path.basename(hgt_path)}...")
-    with open(hgt_path, 'rb') as f:
-        # Skadi tiles are 3601x3601 16-bit big-endian integers (30m resolution)
-        raw_data = np.fromfile(f, np.dtype('>i2'), 3601*3601).reshape((3601, 3601))
+    # 2. Merge and Crop High-Res HGT data
+    print(f"[?] Merging and cropping {len(downloaded_tiles)} SRTM tiles...")
+    
+    src_files_to_mosaic = []
+    for fp in downloaded_tiles:
+        # Rasterio natively reads .hgt files as GeoTIFF equivalents
+        src = rasterio.open(fp)
+        src_files_to_mosaic.append(src)
 
-    # 3. Precision Crop Math
-    # Calculate the exact pixel bounds within the 1-degree tile
-    top_lat = np.floor(bbox[1]) + 1.0 # E.g., if south is 28.5, top of tile is 29.0
-    left_lon = np.floor(bbox[3])      # E.g., if west is 77.2, left of tile is 77.0
+    mosaic, out_trans = merge(src_files_to_mosaic, bounds=(bbox[3], bbox[1], bbox[2], bbox[0]))
     
-    row_start = int((top_lat - bbox[0]) * 3600)
-    row_end = int((top_lat - bbox[1]) * 3600)
-    col_start = int((bbox[3] - left_lon) * 3600)
-    col_end = int((bbox[2] - left_lon) * 3600)
+    # Close files to free memory
+    for src in src_files_to_mosaic:
+        src.close()
+
+    cropped = mosaic[0] # Grab the first band (elevation data)
     
-    # Ensure we don't get empty arrays on tiny selections
-    row_start, row_end = min(row_start, row_end), max(row_start, row_end)
-    col_start, col_end = min(col_start, col_end), max(col_start, col_end)
-    
-    cropped = raw_data[row_start:row_end, col_start:col_end]
-    
-    # ... previous code: cropped = raw_data[row_start:row_end, col_start:col_end] ...
-    
+    # 3. Trend Surface Analysis (Keep your existing math)
     print("[?] Calculating true ground slope (Trend Surface Analysis)...")
-    # 1. Create coordinate grids for the cropped data
-    Y_idx, X_idx = np.mgrid[0:cropped.shape[0], 0:cropped.shape[1]]
-    # Flatten the arrays to feed into our math solver
+    Y_idx, X_idx = np.mgrid[0:cropped.shape[0], 0:cropped.shape[1]]    # Flatten the arrays to feed into our math solver
     X_flat = X_idx.flatten()
     Y_flat = Y_idx.flatten()
     Z_flat = cropped.flatten()
