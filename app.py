@@ -80,6 +80,15 @@ def download_project(project_name):
     shutil.make_archive(zip_filename, 'zip', project_name)
     return send_file(f"{zip_filename}.zip", as_attachment=True)
 
+# Make sure 'import os' is at the very top of your app.py file!
+
 if __name__ == '__main__':
-    # Hugging Face requires apps to run on port 7860 and host 0.0.0.0
-    app.run(host="0.0.0.0", port=7860)
+    # Check if the Hugging Face environment variable exists
+    if os.environ.get('SPACE_ID'):
+        print("Running in Cloud Mode (Hugging Face)...")
+        # The exact host and port Hugging Face requires
+        app.run(host="0.0.0.0", port=7860)
+    else:
+        print("Running in Local Development Mode...")
+        # Standard local Flask port, plus debug mode for easier testing
+        app.run(debug=True, port=5000)
