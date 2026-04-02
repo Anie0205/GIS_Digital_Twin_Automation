@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, Response, send_file
-from flask_cors import CORS # <-- Import this
-import time
+from flask import send_from_directory
+from flask_cors import CORS
 import json
 import os
 import shutil
@@ -18,14 +18,13 @@ def index():
 def stream_pipeline():
     target_data = request.args.get('target', '') 
     display_name = request.args.get('name', 'Selected_Area').replace(" ", "_")
-    imagery_choice = request.args.get('imagery', '3') # <--- NEW: Get the imagery choice
+    imagery_choice = request.args.get('imagery', '3')
     
     def generate():
         def push_update(stage, detail, status="running"):
             data = json.dumps({"stage": stage, "detail": detail, "status": status})
             return f"data: {data}\n\n"
 
-        # Dictionary to map script names to UI text
         stage_map = {
             "vectors_pipeline.py": ("Vector Pipeline", f"Extracting OpenStreetMap vectors for {display_name}..."),
             "ortho_elevation.py": ("Ortho Imagery", "Downloading and processing high-res satellite tiles..."),
@@ -36,11 +35,13 @@ def stream_pipeline():
             "geoai_height.py": ("GeoAI Height Extrusion", "Calculating final 3D building metrics...")
         }
 
-        # Keep track of the current stage so we can attach details to it
         current_stage = "Initializing"
 
         try:
-            # Call master_pipeline instead of individual scripts
+            # FORCE PYTHON TO UNBUFFER LOGS SO THE UI DOESN'T FREEZE
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+
             process = subprocess.Popen(
                 [sys.executable, "-u", "master_pipeline.py", target_data, display_name, imagery_choice],
                 stdout=subprocess.PIPE,
@@ -48,27 +49,25 @@ def stream_pipeline():
                 encoding='utf-8',
                 errors='replace',
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=env
             )
             
-            # Read master_pipeline's console output live
-            for line in process.stdout:
-                print(line, end="") # Still print to Flask terminal for backend debugging
+            # Grabs the text the millisecond it is generated
+            for line in iter(process.stdout.readline, ''):
+                sys.stdout.write(line)
+                sys.stdout.flush() 
+                
                 clean_line = line.strip()
+                if not clean_line: continue
                 
-                if not clean_line:
-                    continue # Skip empty blank lines
-                
-                # 1. Check for a major phase change
                 if ">>> STARTING PHASE:" in line:
                     script_name = line.split(":")[-1].strip()
                     if script_name in stage_map:
                         current_stage, default_detail = stage_map[script_name]
                         yield push_update(current_stage, f"Starting {current_stage}...")
-                        
-                # 2. Check for detailed status updates from inside the scripts!
-                elif clean_line.startswith("[") or "SUCCESS" in clean_line or "ERROR" in clean_line:
-                    # Push the actual underlying script log to the frontend
+                else:
+                    # Pushes EVERYTHING directly to your Web UI
                     yield push_update(current_stage, clean_line)
 
             process.wait()
@@ -87,20 +86,21 @@ def stream_pipeline():
 def download_project(project_name):
     if not os.path.exists(project_name):
         return "Project folder not found.", 404
-
     zip_filename = f"{project_name}_DigitalTwin"
     shutil.make_archive(zip_filename, 'zip', project_name)
     return send_file(f"{zip_filename}.zip", as_attachment=True)
 
-# Make sure 'import os' is at the very top of your app.py file!
+@app.route('/projects/<project_name>/<path:filename>')
+def serve_project_file(project_name, filename):
+    return send_from_directory(project_name, filename)
+
+@app.route('/vision/<project_name>')
+def vision(project_name):
+    return render_template('vision.html', project=project_name)
 
 if __name__ == '__main__':
-    # Check if the Hugging Face environment variable exists
-    if os.environ.get('SPACE_ID'):
-        print("Running in Cloud Mode (Hugging Face)...")
-        # The exact host and port Hugging Face requires
+    IS_HF = "SPACE_ID" in os.environ 
+    if IS_HF:
         app.run(host="0.0.0.0", port=7860)
     else:
-        print("Running in Local Development Mode...")
-        # Standard local Flask port, plus debug mode for easier testing
-        app.run(debug=True, port=5000)
+        app.run(host="127.0.0.1", port=5000, debug=True)

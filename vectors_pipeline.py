@@ -178,7 +178,7 @@ def main():
     bbox_squared, metric_bounds = force_perfect_square_and_metrics(bbox_raw, target_epsg)
 
     # --- NEW: HARD AREA LIMIT ---
-    max_allowed_meters = 3000 # 3km max limit
+    max_allowed_meters = 5000 # 3km max limit
     if metric_bounds['Side_Length_Meters'] > max_allowed_meters:
         print(f"\n[X] CRITICAL ERROR: Selected area ({metric_bounds['Side_Length_Meters']}m) is too large!")
         print(f"[X] Maximum allowed size is {max_allowed_meters}m to prevent server crashes.")
