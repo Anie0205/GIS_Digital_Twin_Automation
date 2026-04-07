@@ -17,7 +17,73 @@ def run_script(script_name, *args):
     except FileNotFoundError:
         print(f"\n[X] Script not found: {script_name}.", flush=True)
         return False
+def generate_web_assets(project_folder):
+    if not project_folder or not os.path.exists(project_folder):
+        return
+        
+    print(f"\n{'='*60}", flush=True)
+    print(" >>> STARTING PHASE: Web Asset Generation", flush=True)
+    print(f"{'='*60}\n", flush=True)
     
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        
+        # Add any .tif files here you want available in your 3D Web UI
+        web_rasters = ["ortho_final.tif"]
+        
+        for raster in web_rasters:
+            tif_path = os.path.join(project_folder, raster)
+            if os.path.exists(tif_path):
+                print(f"[?] Converting {raster} to WebGL-ready PNG...", flush=True)
+                png_path = tif_path.replace('.tif', '.png')
+                Image.open(tif_path).convert('RGB').save(png_path)
+                
+        print("[OK] Web assets generated successfully.", flush=True)
+    except ImportError:
+        print("[!] PIL (Pillow) not installed. Skipping web image generation.", flush=True)
+    except Exception as e:
+        print(f"[!] Error generating web assets: {e}", flush=True)
+
+def generate_web_terrain(project_folder):
+    """Converts raw radar DEM into a WebGL-friendly Terrain-RGB image."""
+    if not project_folder or not os.path.exists(project_folder):
+        return
+        
+    print(f"\n{'='*60}", flush=True)
+    print(" >>> STARTING PHASE: Web 3D Terrain Generation", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    
+    tif_path = os.path.join(project_folder, "terrain_geoai_final.tif")
+    if not os.path.exists(tif_path):
+        print("[!] No GeoAI terrain found. Skipping web terrain generation.", flush=True)
+        return
+
+    try:
+        import numpy as np
+        import rasterio
+        from PIL import Image
+        
+        print(f"[?] Encoding {os.path.basename(tif_path)} to Terrain-RGB...", flush=True)
+        with rasterio.open(tif_path) as src:
+            dem = src.read(1)
+            
+            # The Magic Math: Hide elevation data inside RGB color channels
+            # Formula: height = -10000 + ((R * 256 * 256 + G * 256 + B) * 0.1)
+            val = np.clip(np.round((dem + 10000) * 10), 0, 16777215).astype(np.uint32)
+            
+            r = (val >> 16) & 255
+            g = (val >> 8) & 255
+            b = val & 255
+            
+            rgb = np.dstack((r, g, b)).astype(np.uint8)
+            output_path = os.path.join(project_folder, "terrain_rgb.png")
+            Image.fromarray(rgb).save(output_path)
+            
+        print("[OK] Terrain Mesh safely encoded for the Web UI.", flush=True)
+    except Exception as e:
+        print(f"[X] Failed to generate terrain mesh: {e}", flush=True)
+
 def cleanup_intermediate_files(project_folder):
     if not project_folder or not os.path.exists(project_folder):
         return
@@ -112,7 +178,8 @@ def main():
         if not success:
             break
     else:
-        # --> ADD CLEANUP CALL HERE <--
+        generate_web_assets(project_folder)
+        generate_web_terrain(project_folder)
         cleanup_intermediate_files(project_folder)
         
         print(f"\n{'='*60}", flush=True)

@@ -79,6 +79,8 @@ def process_datasets_for_3dexperience(project_dir=None):
                             return float(row['building:levels']) * 3.5 
                         return 10.0 + (row['base_elev'] % 5)
                     gdf['render_height'] = gdf.apply(estimate_smart_height, axis=1)
+                    # Add this line to bend the building bases over the hills!
+                    gdf['geometry'] = gdf.geometry.apply(lambda geom: drape_geometry(geom, dem))
                 else:
                     # 2. DRAPE: Inject true [X, Y, Z] coordinates for roads, rivers, etc.
                     gdf['geometry'] = gdf.geometry.apply(lambda geom: drape_geometry(geom, dem))
@@ -88,6 +90,13 @@ def process_datasets_for_3dexperience(project_dir=None):
                 
                 # Save the base file
                 gdf.to_file(output_path, driver='GeoJSON')
+               # --- NEW: Save a Web UI version in GPS coordinates (WGS84) ---
+                if gdf.crs is None:
+                    gdf.set_crs(f"EPSG:{epsg_code}", inplace=True)
+                web_name = f"{target_name}_web_3d_ready.geojson"
+                web_path = os.path.join(abs_path, web_name)
+                gdf.to_crs("EPSG:4326").to_file(web_path, driver='GeoJSON')
+                # -------------------------------------------------------------
                 
                 # 3. CRS HACK: Inject the explicit OGC URN CRS so Dassault reads the metrics
                 # FIX: Added encoding='utf-8' to prevent decoding crashes on international characters

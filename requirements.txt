@@ -1,0 +1,29 @@
+# Web Framework
+flask
+flask-cors
+
+# Geospatial & Data Science
+geopandas
+pandas
+rasterio
+shapely
+numpy
+pyproj
+osmnx
+
+# Machine Learning & AI
+torch
+transformers
+
+# Image Processing
+Pillow
+opencv-python
+
+# Map & Earth Engine
+earthengine-api
+geemap
+
+# UI & Utilities
+tkintermapview
+requests
+python-dotenv

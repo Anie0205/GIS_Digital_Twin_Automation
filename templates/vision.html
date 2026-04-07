@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GeoAI | 3D Vision - {{ project }}</title>
+    <script src="https://unpkg.com/maplibre-gl@3.3.1/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.3.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/deck.gl@8.9.0/dist.min.js"></script>
+    <script src="https://unpkg.com/@deck.gl/geo-layers@8.9.0/dist.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #1e1e24; font-family: 'Space Grotesk', sans-serif; overflow: hidden;}
+        #map-container { width: 100vw; height: 100vh; position: absolute; }
+        .hud {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(20, 20, 20, 0.8); border: 1px solid #00b894;
+            color: white; padding: 15px 25px; border-radius: 8px; backdrop-filter: blur(10px);
+        }
+        h2 { margin: 0 0 5px 0; color: #00b894; font-size: 18px; text-transform: uppercase; letter-spacing: 2px;}
+        p { margin: 0; font-size: 12px; color: #a0a0a0; }
+        #error-msg { color: #ff7675; font-weight: bold; display: none; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="map-container"></div>
+    
+    <div class="hud">
+        <h2>{{ project }}</h2>
+        <p>Live WebGL Digital Twin</p>
+        <p style="margin-top: 10px; color: #fff;">Hold Right-Click + Drag to rotate 3D view</p>
+        <p id="error-msg">⚠️ Missing Data! Check Console (F12)</p>
+    </div>
+
+    <script>
+        const PROJECT_NAME = "{{ project }}";
+        const BASE_URL = window.location.origin;
+
+        fetch(`${BASE_URL}/projects/${PROJECT_NAME}/metadata.json`)
+            .then(res => {
+                if (!res.ok) throw new Error("Metadata file not found!");
+                return res.json();
+            })
+            .then(metadata => {
+                const bbox = metadata.bbox; 
+                const centerLat = (bbox[0] + bbox[1]) / 2;
+                const centerLon = (bbox[2] + bbox[3]) / 2;
+                const imageBounds = [bbox[3], bbox[1], bbox[2], bbox[0]]; // [W, S, E, N]
+
+                initDeckGL(centerLon, centerLat, imageBounds);
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerText = "⚠️ Error: " + err.message;
+                initDeckGL(77.2, 28.6, null); 
+            });
+
+        function initDeckGL(lon, lat, bounds) {
+            // Import both standard layers and the TerrainLayer
+            const {DeckGL, GeoJsonLayer} = deck;
+            const {TerrainLayer} = deck; 
+            const layers = [];
+
+            if (bounds) {
+                // This layer builds the 3D hills and physically stretches the ortho image over them!
+                layers.push(new TerrainLayer({
+                    id: '3d-terrain',
+                    minZoom: 0,
+                    maxZoom: 23,
+                    elevationDecoder: {
+                        rScaler: 6553.6,  // Fixed!
+                        gScaler: 25.6,    // Fixed!
+                        bScaler: 0.1,     // Fixed!
+                        offset: -10000
+                    },
+                    elevationData: `${BASE_URL}/projects/${PROJECT_NAME}/terrain_rgb.png`,
+                    texture: `${BASE_URL}/projects/${PROJECT_NAME}/ortho_final.png`,
+                    bounds: bounds,
+                    material: { ambient: 1.0, diffuse: 0.8 }
+                }));
+            }
+
+            layers.push(new GeoJsonLayer({
+                id: '3d-roads',
+                data: `${BASE_URL}/projects/${PROJECT_NAME}/highway_web_3d_ready.geojson`,
+                stroked: true,
+                filled: false,
+                lineWidthMinPixels: 2,
+                getLineColor: [0, 184, 148, 255], 
+                getLineWidth: 3
+            }));
+
+            layers.push(new GeoJsonLayer({
+                id: '3d-buildings',
+                data: `${BASE_URL}/projects/${PROJECT_NAME}/building_web_3d_ready.geojson`,
+                stroked: true,
+                filled: true,
+                extruded: true,
+                wireframe: true,
+                getElevation: d => (Number(d.properties.render_height) || 15) * 1.5, 
+                getFillColor: [223, 230, 233, 255],
+                getLineColor: [178, 190, 195, 255],
+                pickable: true,
+                autoHighlight: true,
+                highlightColor: [0, 184, 148, 100]
+            }));
+
+            new DeckGL({
+                container: 'map-container',
+                mapStyle: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                initialViewState: { longitude: lon, latitude: lat, zoom: 15.5, pitch: 60, bearing: -20 },
+                controller: true,
+                layers: layers,
+                getTooltip: ({object}) => {
+                    if (!object) return null;
+                    
+                    const props = object.properties;
+                    // Try to find a name, default to "Unnamed Structure"
+                    const title = props.name || props['addr:housename'] || props['amenity'] || 'Structure';
+                    const height = Math.round(props.render_height || 0);
+                    
+                    // Automatically list out all other interesting OSM attributes
+                    let extraDetails = '';
+                    const ignoreKeys = ['name', 'addr:housename', 'render_height', 'base_elev', 'id', 'nodes'];
+                    
+                    for (const [key, value] of Object.entries(props)) {
+                        // Skip empty data, 'nan' strings from Pandas, and system keys
+                        if (value && value !== 'nan' && value !== 'None' && !ignoreKeys.includes(key)) {
+                            // Format: "Building: yes", "Amenity: school"
+                            const cleanKey = key.charAt(0).toUpperCase() + key.slice(1);
+                            extraDetails += `<span style="color:#a0a0a0">${cleanKey}:</span> ${value}<br/>`;
+                        }
+                    }
+                    
+                    return {
+                        html: `
+                            <div style="min-width: 150px;">
+                                <div style="color: #00b894; font-size: 14px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">
+                                    ${title}
+                                </div>
+                                <div style="color: #fff; font-weight: bold; margin-bottom: 6px;">
+                                    Height: ${height}m
+                                </div>
+                                <div style="border-top: 1px solid #333; padding-top: 6px; font-size: 11px; line-height: 1.5;">
+                                    ${extraDetails}
+                                </div>
+                            </div>
+                        `,
+                        style: {
+                            backgroundColor: 'rgba(15, 15, 18, 0.95)',
+                            color: '#fff',
+                            border: '1px solid #00b894',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                            fontFamily: "'Space Grotesk', sans-serif"
+                        }
+                    };
+                }
+            });
+        }
+    </script>
+</body>
+</html>
